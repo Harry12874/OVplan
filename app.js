@@ -1342,6 +1342,7 @@ function agendaItemActions(item) {
   if (item.status === "PENDING") {
     return `
       <button class="secondary" data-action="done">${agendaActionLabel(item)}</button>
+      ${item.isOneOff ? '<button class="ghost" data-action="bump-back">Bump back 1 day</button>' : ""}
       <button class="ghost" data-action="skip">Skip</button>
       ${item.isOneOff ? '<button class="ghost danger" data-action="delete">Delete</button>' : ""}
     `;
@@ -2140,7 +2141,7 @@ function openSchedulePopover(item, anchor) {
 }
 
 async function handleAgendaAction(item, action) {
-  if (!canWrite() && ["done", "skip", "undo", "delete"].includes(action)) {
+  if (!canWrite() && ["done", "skip", "undo", "delete", "bump-back"].includes(action)) {
     showOfflineAlert();
     return;
   }
@@ -2162,6 +2163,10 @@ async function handleAgendaAction(item, action) {
     await setScheduleEventStatus(item, "PENDING");
     return;
   }
+  if (action === "bump-back" && item.isOneOff) {
+    await bumpOneOffItemDate(item, -1);
+    return;
+  }
   if (action === "delete" && item.isOneOff) {
     await deleteOneOffItem(item.sourceId);
   }
@@ -2179,6 +2184,29 @@ function attachAgendaItemActions(container, items) {
         await handleAgendaAction(item, action);
       });
     });
+  });
+}
+
+async function bumpOneOffItemDate(item, offsetDays) {
+  if (!canWrite()) {
+    showOfflineAlert();
+    return;
+  }
+  const record = state.oneOffItems.find((entry) => entry.id === item.sourceId);
+  if (!record) return;
+  const previousDate = record.date;
+  const nextDate = addDays(previousDate, offsetDays);
+  record.date = nextDate;
+  await put("one_off_items", record);
+  state.oneOffItems = state.oneOffItems.map((entry) => (entry.id === record.id ? record : entry));
+  renderAll();
+  showSnackbar(`Bumped back to ${formatDate(nextDate)}.`, async () => {
+    record.date = previousDate;
+    await put("one_off_items", record);
+    state.oneOffItems = state.oneOffItems.map((entry) =>
+      entry.id === record.id ? record : entry
+    );
+    renderAll();
   });
 }
 
