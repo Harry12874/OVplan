@@ -102,6 +102,12 @@ const elements = {
   scheduleDatePicker: document.getElementById("scheduleDatePicker"),
   scheduleRangeLabel: document.getElementById("scheduleRangeLabel"),
   scheduleSearch: document.getElementById("scheduleSearch"),
+  scheduleFiltersToggle: document.getElementById("scheduleFiltersToggle"),
+  scheduleFiltersPanel: document.getElementById("scheduleFiltersPanel"),
+  scheduleToolbar: document.getElementById("scheduleToolbar"),
+  scheduleDaySelect: document.getElementById("scheduleDaySelect"),
+  scheduleDayPrev: document.getElementById("scheduleDayPrev"),
+  scheduleDayNext: document.getElementById("scheduleDayNext"),
   exportStart: document.getElementById("exportStart"),
   exportEnd: document.getElementById("exportEnd"),
   exportRep: document.getElementById("exportRep"),
@@ -269,6 +275,7 @@ const defaultSettings = {
     statusFilter: "all",
     viewMode: "week",
     anchorDate: todayKey(),
+    activeDayKey: todayKey(),
     searchTerm: "",
   },
 };
@@ -829,7 +836,15 @@ function rangeKeys(startKey, endKey) {
 
 function buildScheduleItems(startKey, endKey) {
   const items = [];
+  const seen = new Set();
   const keys = rangeKeys(startKey, endKey);
+
+  const addItem = (item) => {
+    const key = `${item.customerId}-${item.kind}-${item.date}-${item.runIndex ?? "x"}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push(item);
+  };
 
   keys.forEach((dateKey) => {
     const dayIndex = dayIndexFromDateKey(dateKey);
@@ -856,28 +871,11 @@ function buildScheduleItems(startKey, endKey) {
           });
         }
         runs.forEach((run) => {
-          if (run.orderDay === null || run.orderDay === undefined) return;
-          if (dayIndex !== run.orderDay) return;
-          items.push({
-            id: uuid(),
-            kind: "expected_order",
-            date: dateKey,
-            customerId: customer.id,
-            repId: customer.assignedRepId,
-            runIndex: run.runIndex,
-            frequency: schedule.frequency,
-            title: customer.storeName,
-            subtitle: customer.contactName || "",
-            orderMode: schedule.mode,
-          });
-
-          const packDay = run.packDay ?? run.orderDay;
-          const packDate = nextDateForWeekday(dateKey, packDay);
-          if (packDate >= startKey && packDate <= endKey) {
-            items.push({
+          if (run.orderDay !== null && run.orderDay !== undefined && dayIndex === run.orderDay) {
+            addItem({
               id: uuid(),
-              kind: "pack",
-              date: packDate,
+              kind: "expected_order",
+              date: dateKey,
               customerId: customer.id,
               repId: customer.assignedRepId,
               runIndex: run.runIndex,
@@ -888,15 +886,27 @@ function buildScheduleItems(startKey, endKey) {
             });
           }
 
-          const deliveryDate =
-            run.deliverDay !== null && run.deliverDay !== undefined
-              ? nextDateForWeekday(dateKey, run.deliverDay)
-              : addDays(dateKey, 1);
-          if (deliveryDate >= startKey && deliveryDate <= endKey) {
-            items.push({
+          const packDay = run.packDay ?? run.orderDay;
+          if (packDay !== null && packDay !== undefined && dayIndex === packDay) {
+            addItem({
+              id: uuid(),
+              kind: "pack",
+              date: dateKey,
+              customerId: customer.id,
+              repId: customer.assignedRepId,
+              runIndex: run.runIndex,
+              frequency: schedule.frequency,
+              title: customer.storeName,
+              subtitle: customer.contactName || "",
+              orderMode: schedule.mode,
+            });
+          }
+
+          if (run.deliverDay !== null && run.deliverDay !== undefined && dayIndex === run.deliverDay) {
+            addItem({
               id: uuid(),
               kind: "delivery",
-              date: deliveryDate,
+              date: dateKey,
               customerId: customer.id,
               repId: customer.assignedRepId,
               runIndex: run.runIndex,
@@ -912,7 +922,7 @@ function buildScheduleItems(startKey, endKey) {
       if (schedule.mode === "THEY_PUT_ORDER") {
         schedule.customerOrderDays.forEach((orderDay) => {
           if (dayIndex !== orderDay) return;
-          items.push({
+          addItem({
             id: uuid(),
             kind: "expected_order",
             date: dateKey,
@@ -924,43 +934,37 @@ function buildScheduleItems(startKey, endKey) {
             subtitle: customer.contactName || "",
             orderMode: schedule.mode,
           });
-
-          const packDate = schedule.packDays?.length
-            ? nextDateForAnyWeekday(dateKey, schedule.packDays)
-            : dateKey;
-          if (packDate >= startKey && packDate <= endKey) {
-            items.push({
-              id: uuid(),
-              kind: "pack",
-              date: packDate,
-              customerId: customer.id,
-              repId: customer.assignedRepId,
-              runIndex: null,
-              frequency: schedule.frequency,
-              title: customer.storeName,
-              subtitle: customer.contactName || "",
-              orderMode: schedule.mode,
-            });
-          }
-
-          const deliveryDate = schedule.deliverDays?.length
-            ? nextDateForAnyWeekday(dateKey, schedule.deliverDays)
-            : addDays(dateKey, 1);
-          if (deliveryDate >= startKey && deliveryDate <= endKey) {
-            items.push({
-              id: uuid(),
-              kind: "delivery",
-              date: deliveryDate,
-              customerId: customer.id,
-              repId: customer.assignedRepId,
-              runIndex: null,
-              frequency: schedule.frequency,
-              title: customer.storeName,
-              subtitle: customer.contactName || "",
-              orderMode: schedule.mode,
-            });
-          }
         });
+
+        if (schedule.packDays?.includes(dayIndex)) {
+          addItem({
+            id: uuid(),
+            kind: "pack",
+            date: dateKey,
+            customerId: customer.id,
+            repId: customer.assignedRepId,
+            runIndex: null,
+            frequency: schedule.frequency,
+            title: customer.storeName,
+            subtitle: customer.contactName || "",
+            orderMode: schedule.mode,
+          });
+        }
+
+        if (schedule.deliverDays?.includes(dayIndex)) {
+          addItem({
+            id: uuid(),
+            kind: "delivery",
+            date: dateKey,
+            customerId: customer.id,
+            repId: customer.assignedRepId,
+            runIndex: null,
+            frequency: schedule.frequency,
+            title: customer.storeName,
+            subtitle: customer.contactName || "",
+            orderMode: schedule.mode,
+          });
+        }
       }
     });
   });
@@ -1399,7 +1403,7 @@ function scheduleItemDetailCard(item, { showActions = true } = {}) {
   const orderModeLabel = scheduleOrderModeLabel(item);
   const selectionChecked = state.selectedScheduleItems.has(item.selectionId) ? "checked" : "";
   return `
-    <div class="schedule-detail-card ${agendaTypeClass(item)}" data-item-id="${item.selectionId}">
+    <div class="schedule-detail-card ${agendaTypeClass(item)} is-collapsed" data-item-id="${item.selectionId}">
       <header class="schedule-detail-header">
         <div class="schedule-detail-header-left">
           <label class="schedule-select">
@@ -1414,12 +1418,17 @@ function scheduleItemDetailCard(item, { showActions = true } = {}) {
         <button class="link-button" data-action="open">${item.title}</button>
         <span class="agenda-meta">— ${sourceLabel}${orderModeLabel ? ` (${orderModeLabel})` : ""}</span>
       </div>
-      ${item.subtitle ? `<div class="muted">${item.subtitle}</div>` : ""}
-      ${suburb || postcode ? `<div class="muted">${suburb} ${postcode}</div>` : ""}
-      ${repLabel ? `<div class="muted">Rep: ${repLabel}</div>` : ""}
-      ${item.note ? `<div class="muted">${item.note}</div>` : ""}
-      ${item.status === "SKIPPED" ? `<div class="status-badge">Skipped: ${item.skippedReasonText || item.skippedReason}</div>` : ""}
-      ${showActions ? `<div class="form-actions">${agendaItemActions(item)}</div>` : ""}
+      <div class="schedule-detail-body">
+        ${item.subtitle ? `<div class="muted">${item.subtitle}</div>` : ""}
+        ${suburb || postcode ? `<div class="muted">${suburb} ${postcode}</div>` : ""}
+        ${repLabel ? `<div class="muted">Rep: ${repLabel}</div>` : ""}
+        ${item.note ? `<div class="muted">${item.note}</div>` : ""}
+        ${item.status === "SKIPPED" ? `<div class="status-badge">Skipped: ${item.skippedReasonText || item.skippedReason}</div>` : ""}
+      </div>
+      <div class="schedule-detail-actions">
+        <button class="btn btn-secondary btn-small" type="button" data-action="toggle-details" aria-expanded="false">Expand</button>
+        ${showActions ? `<div class="form-actions">${agendaItemActions(item)}</div>` : ""}
+      </div>
     </div>
   `;
 }
@@ -1427,6 +1436,8 @@ function scheduleItemDetailCard(item, { showActions = true } = {}) {
 function scheduleItemChip(item) {
   const selectionChecked = state.selectedScheduleItems.has(item.selectionId) ? "checked" : "";
   const orderModeLabel = scheduleOrderModeLabel(item);
+  const statusLabel =
+    item.status === "DONE" ? "Done" : item.status === "SKIPPED" ? "Skipped" : "Pending";
   return `
     <div class="schedule-chip-row ${agendaTypeClass(item)}">
       <label class="schedule-select">
@@ -1436,6 +1447,7 @@ function scheduleItemChip(item) {
       <button class="schedule-chip" data-action="details">
         <span class="chip-dot ${agendaTypeLabelClass(item)}"></span>
         <span class="chip-title">${item.title}</span>
+        <span class="status-pill ${item.status.toLowerCase()} chip-status">${statusLabel}</span>
         ${orderModeLabel ? `<span class="chip-meta">${orderModeLabel}</span>` : ""}
       </button>
     </div>
@@ -1833,6 +1845,20 @@ function renderSchedule() {
   const searchTerm = view.searchTerm || "";
   const anchorDate = view.anchorDate || todayKey();
   const viewMode = view.viewMode || "week";
+  const activeDayKey = view.activeDayKey || anchorDate;
+
+  if (elements.scheduleToolbar) {
+    elements.scheduleToolbar.dataset.view = viewMode;
+  }
+  if (elements.scheduleDaySelect) {
+    elements.scheduleDaySelect.disabled = viewMode !== "week";
+  }
+  if (elements.scheduleDayPrev) {
+    elements.scheduleDayPrev.disabled = viewMode !== "week";
+  }
+  if (elements.scheduleDayNext) {
+    elements.scheduleDayNext.disabled = viewMode !== "week";
+  }
 
   elements.scheduleRangeLabel.textContent = formatRangeLabel(viewMode, anchorDate);
   elements.scheduleDatePicker.value = anchorDate;
@@ -1846,6 +1872,10 @@ function renderSchedule() {
   };
 
   if (viewMode === "day") {
+    if (elements.scheduleDaySelect) {
+      elements.scheduleDaySelect.innerHTML = `<option value="${anchorDate}">${formatDate(anchorDate)}</option>`;
+      elements.scheduleDaySelect.value = anchorDate;
+    }
     const items = getItemsForRange({
       dateStart: anchorDate,
       dateEnd: anchorDate,
@@ -1910,25 +1940,38 @@ function renderSchedule() {
       return acc;
     }, {});
     const days = dateRange(weekStart, 7);
+    const resolvedActiveDay = days.includes(activeDayKey) ? activeDayKey : anchorDate;
+    if (resolvedActiveDay !== view.activeDayKey) {
+      state.settings.app.scheduleView.activeDayKey = resolvedActiveDay;
+    }
+    if (elements.scheduleDaySelect) {
+      elements.scheduleDaySelect.innerHTML = days
+        .map((dateKey) => `<option value="${dateKey}">${formatDate(dateKey)}</option>`)
+        .join("");
+      elements.scheduleDaySelect.value = resolvedActiveDay;
+    }
     elements.scheduleList.innerHTML = `
-      <div class="schedule-week-view">
-        ${days
-          .map((dateKey) => {
-            const dayItems = (grouped[dateKey] || []).sort(sortByTypeThenTitle);
-            const isToday = dateKey === todayKey();
-            return `
-              <div class="week-day ${isToday ? "today" : ""}" data-date="${dateKey}">
-                <div class="week-day-header">
-                  <span>${formatDate(dateKey)}</span>
-                  ${isToday ? '<span class="pill">Today</span>' : ""}
+      <div class="schedule-week-scroll">
+        <div class="schedule-week-view">
+          ${days
+            .map((dateKey) => {
+              const dayItems = (grouped[dateKey] || []).sort(sortByTypeThenTitle);
+              const isToday = dateKey === todayKey();
+              const isActive = dateKey === resolvedActiveDay;
+              return `
+                <div class="week-day ${isToday ? "today" : ""} ${isActive ? "is-active" : "is-inactive"}" data-date="${dateKey}">
+                  <div class="week-day-header">
+                    <span>${formatDate(dateKey)}</span>
+                    ${isToday ? '<span class="pill">Today</span>' : ""}
+                  </div>
+                  <div class="week-day-items">
+                    ${dayItems.map((item) => `<div class="week-item" data-item-id="${item.selectionId}">${scheduleItemChip(item)}</div>`).join("") || "<span class=\"muted\">—</span>"}
+                  </div>
                 </div>
-                <div class="week-day-items">
-                  ${dayItems.map((item) => `<div class="week-item" data-item-id="${item.selectionId}">${scheduleItemChip(item)}</div>`).join("") || "<span class=\"muted\">—</span>"}
-                </div>
-              </div>
-            `;
-          })
-          .join("")}
+              `;
+            })
+            .join("")}
+        </div>
       </div>
     `;
     attachScheduleSelectionHandlers(elements.scheduleList, items);
@@ -1936,6 +1979,10 @@ function renderSchedule() {
     return;
   }
 
+  if (elements.scheduleDaySelect) {
+    elements.scheduleDaySelect.innerHTML = `<option value="${anchorDate}">${formatDate(anchorDate)}</option>`;
+    elements.scheduleDaySelect.value = anchorDate;
+  }
   const { gridStart, gridEnd } = monthGridRange(anchorDate);
   const totalDays =
     Math.floor((dateKeyToDate(gridEnd) - dateKeyToDate(gridStart)) / (1000 * 60 * 60 * 24)) + 1;
@@ -2001,6 +2048,14 @@ function attachScheduleDetailActions(container, items) {
     if (!item) return;
     button.addEventListener("click", async () => {
       const action = button.dataset.action;
+      if (action === "toggle-details") {
+        const card = button.closest(".schedule-detail-card");
+        if (!card) return;
+        const isCollapsed = card.classList.toggle("is-collapsed");
+        button.textContent = isCollapsed ? "Expand" : "Collapse";
+        button.setAttribute("aria-expanded", String(!isCollapsed));
+        return;
+      }
       await handleAgendaAction(item, action);
     });
   });
@@ -3877,6 +3932,10 @@ function setupEvents() {
   on(elements.scheduleRepFilter, "change", renderSchedule);
   onDoc(".schedule-view-button", "click", async (_event, button) => {
     state.settings.app.scheduleView.viewMode = button.dataset.view;
+    if (button.dataset.view === "week") {
+      state.settings.app.scheduleView.activeDayKey =
+        state.settings.app.scheduleView.anchorDate || todayKey();
+    }
     await saveSettings();
     syncScheduleViewControls();
     renderSchedule();
@@ -3884,26 +3943,38 @@ function setupEvents() {
   on(elements.schedulePrevBtn, "click", async () => {
     const viewMode = state.settings.app.scheduleView.viewMode;
     const current = state.settings.app.scheduleView.anchorDate || todayKey();
-    state.settings.app.scheduleView.anchorDate =
-      viewMode === "month" ? addMonthsToDateKey(current, -1) : addDays(current, viewMode === "week" ? -7 : -1);
+    const nextDate =
+      viewMode === "month"
+        ? addMonthsToDateKey(current, -1)
+        : addDays(current, viewMode === "week" ? -7 : -1);
+    state.settings.app.scheduleView.anchorDate = nextDate;
+    state.settings.app.scheduleView.activeDayKey = nextDate;
     await saveSettings();
     renderSchedule();
   });
   on(elements.scheduleNextBtn, "click", async () => {
     const viewMode = state.settings.app.scheduleView.viewMode;
     const current = state.settings.app.scheduleView.anchorDate || todayKey();
-    state.settings.app.scheduleView.anchorDate =
-      viewMode === "month" ? addMonthsToDateKey(current, 1) : addDays(current, viewMode === "week" ? 7 : 1);
+    const nextDate =
+      viewMode === "month"
+        ? addMonthsToDateKey(current, 1)
+        : addDays(current, viewMode === "week" ? 7 : 1);
+    state.settings.app.scheduleView.anchorDate = nextDate;
+    state.settings.app.scheduleView.activeDayKey = nextDate;
     await saveSettings();
     renderSchedule();
   });
   on(elements.scheduleTodayBtn, "click", async () => {
-    state.settings.app.scheduleView.anchorDate = todayKey();
+    const today = todayKey();
+    state.settings.app.scheduleView.anchorDate = today;
+    state.settings.app.scheduleView.activeDayKey = today;
     await saveSettings();
     renderSchedule();
   });
   on(elements.scheduleDatePicker, "change", async () => {
-    state.settings.app.scheduleView.anchorDate = elements.scheduleDatePicker.value || todayKey();
+    const nextDate = elements.scheduleDatePicker.value || todayKey();
+    state.settings.app.scheduleView.anchorDate = nextDate;
+    state.settings.app.scheduleView.activeDayKey = nextDate;
     await saveSettings();
     renderSchedule();
   });
@@ -3922,6 +3993,47 @@ function setupEvents() {
   });
   on(elements.scheduleSelectAllBtn, "click", selectAllVisibleScheduleItems);
   on(elements.scheduleExportSelectedBtn, "click", exportSelectedScheduleItems);
+  on(elements.scheduleDaySelect, "change", async () => {
+    const nextDate = elements.scheduleDaySelect.value;
+    if (!nextDate) return;
+    state.settings.app.scheduleView.activeDayKey = nextDate;
+    state.settings.app.scheduleView.anchorDate = nextDate;
+    await saveSettings();
+    renderSchedule();
+  });
+  on(elements.scheduleDayPrev, "click", async () => {
+    const current = elements.scheduleDaySelect?.value || todayKey();
+    const nextDate = addDays(current, -1);
+    state.settings.app.scheduleView.activeDayKey = nextDate;
+    state.settings.app.scheduleView.anchorDate = nextDate;
+    await saveSettings();
+    renderSchedule();
+  });
+  on(elements.scheduleDayNext, "click", async () => {
+    const current = elements.scheduleDaySelect?.value || todayKey();
+    const nextDate = addDays(current, 1);
+    state.settings.app.scheduleView.activeDayKey = nextDate;
+    state.settings.app.scheduleView.anchorDate = nextDate;
+    await saveSettings();
+    renderSchedule();
+  });
+  on(elements.scheduleFiltersToggle, "click", (event) => {
+    event.stopPropagation();
+    const wrapper = elements.scheduleFiltersToggle.closest(".schedule-filters-wrapper");
+    if (!wrapper) return;
+    wrapper.classList.toggle("open");
+    elements.scheduleFiltersToggle.setAttribute(
+      "aria-expanded",
+      String(wrapper.classList.contains("open"))
+    );
+  });
+  document.addEventListener("click", (event) => {
+    const wrapper = elements.scheduleFiltersToggle?.closest(".schedule-filters-wrapper");
+    if (!wrapper || !wrapper.classList.contains("open")) return;
+    if (wrapper.contains(event.target)) return;
+    wrapper.classList.remove("open");
+    elements.scheduleFiltersToggle?.setAttribute("aria-expanded", "false");
+  });
   const updateToggleSettings = async () => {
     state.settings.app.scheduleView.toggles = {
       expectedOrders: elements.todayToggleExpected.checked,
