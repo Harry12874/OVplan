@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Orchard Valley Planner</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+</head>
+<body>
+  <div id="appRoot">
+    <div id="offlineBanner" class="offline-banner hidden">
+      Offline: changes can’t sync yet.
+    </div>
+    <div id="syncErrorBanner" class="sync-error-banner hidden"></div>
+
+    <div id="loginScreen" class="login-screen hidden">
+      <div class="login-card">
+        <h2>Sign in</h2>
+        <p class="muted">Use your Orchard Valley account to access the planner.</p>
+        <form id="loginForm" class="form">
+          <label>Email
+            <input id="loginEmail" type="email" required autocomplete="email" />
+          </label>
+          <label>Password
+            <input id="loginPassword" type="password" required autocomplete="current-password" />
+          </label>
+          <label class="login-toggle">
+            <input id="loginShowPassword" type="checkbox" />
+            Show password
+          </label>
+          <div id="loginError" class="login-error hidden"></div>
+          <div id="loginLoading" class="login-loading hidden">Signing in…</div>
+          <button class="btn btn-primary" type="submit">Log in</button>
+        </form>
+      </div>
+    </div>
+
+    <div id="appShell" class="app-shell hidden">
+    <div class="app-layout">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-icon">🍎</span>
+          <span class="brand-name">Orchard Valley</span>
+        </div>
+        <nav class="tabs sidebar-tabs" role="tablist">
+          <button class="tab active" data-tab="dashboard">
+            <span class="tab-icon">📅</span>
+            Schedule
+          </button>
+          <button class="tab" data-tab="customers">
+            <span class="tab-icon">👥</span>
+            Customers
+          </button>
+          <button class="tab" data-tab="account">
+            <span class="tab-icon">⚙️</span>
+            Account
+          </button>
+        </nav>
+        <div class="sidebar-footer">
+          <span id="statusIndicator" class="status-indicator">Not logged in</span>
+          <span id="cloudStatus" class="cloud-status">Cloud: Offline (local only)</span>
+        </div>
+      </aside>
+
+      <div class="main-content">
+        <header class="app-header">
+          <div>
+            <h1>Orchard Valley Planner</h1>
+            <p>Order → Pack → Deliver</p>
+          </div>
+          <div class="header-actions">
+            <button id="logoutBtn" class="btn btn-secondary">Logout</button>
+            <button id="sampleDataBtn" class="btn btn-secondary" data-requires-online="true">Load sample data</button>
+            <button id="helpBtn" class="btn btn-secondary">User guide</button>
+          </div>
+        </header>
+
+        <main class="content">
+          <section id="dashboard" class="tab-panel active" aria-labelledby="Today">
+            <div class="panel-header">
+              <div>
+                <h2 class="page-title">Morning</h2>
+                <p class="muted">Here’s what’s happening today.</p>
+              </div>
+              <div class="actions">
+                <button class="btn btn-primary tab" data-tab="schedule">View schedule</button>
+              </div>
+            </div>
+            <div class="summary-tiles">
+              <div class="summary-tile tile-deliveries">
+                <div class="summary-number" id="todayDeliveriesCount"></div>
+                <div class="summary-label">Deliveries Today</div>
+              </div>
+              <div class="summary-tile tile-orders">
+                <div class="summary-number" id="todayOrdersPutCount"></div>
+                <div class="summary-label">Expected Orders</div>
+                <span id="todayOrdersGetCount" class="sr-only"></span>
+              </div>
+              <div class="summary-tile tile-packs">
+                <div class="summary-number" id="todayPacksCount"></div>
+                <div class="summary-label">Packing Today</div>
+              </div>
+            </div>
+
+            <div class="dashboard-grid">
+              <div class="card">
+                <div class="card-header">
+                  <h3>Today’s tasks</h3>
+                  <select id="dashboardRepFilter" title="Filter today’s agenda by rep."></select>
+                </div>
+                <div id="todayOrdersPutList" class="list"></div>
+                <div id="todayOrdersGetList" class="list"></div>
+                <div id="todayPacksList" class="list"></div>
+                <div id="todayDeliveriesList" class="list"></div>
+              </div>
+              <div class="card">
+                <div class="card-header">
+                  <h3>Today filters</h3>
+                </div>
+                <div class="filters">
+                  <input id="dashboardSearch" type="search" placeholder="Search store or address" class="search" />
+                  <div class="toggle-group">
+                    <label><input id="todayToggleExpected" type="checkbox" checked /> Expected orders</label>
+                    <label><input id="todayTogglePacks" type="checkbox" checked /> Packs</label>
+                    <label><input id="todayToggleDeliveries" type="checkbox" checked /> Deliveries</label>
+                  </div>
+                  <div id="todayStatusFilters" class="filter-chips">
+                    <button class="filter-chip active" data-status="all">All</button>
+                    <button class="filter-chip" data-status="pending">Pending</button>
+                    <button class="filter-chip" data-status="done">Done</button>
+                    <button class="filter-chip" data-status="skipped">Skipped</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section id="schedule" class="tab-panel" aria-labelledby="Schedule">
+            <div class="panel-header">
+              <div>
+                <h2 class="page-title">Schedule</h2>
+                <p class="muted">Plan deliveries, orders, and packing.</p>
+              </div>
+              <div class="actions">
+                <button id="addOneOffScheduleBtn" class="btn btn-primary" data-requires-online="true">+ One-off item</button>
+              </div>
+            </div>
+            <div class="schedule-toolbar">
+              <div class="schedule-nav">
+                <button id="schedulePrevBtn" class="btn btn-secondary" aria-label="Previous">←</button>
+                <button id="scheduleTodayBtn" class="btn btn-secondary">Today</button>
+                <button id="scheduleNextBtn" class="btn btn-secondary" aria-label="Next">→</button>
+                <input id="scheduleDatePicker" type="date" aria-label="Jump to date" />
+              </div>
+              <div class="schedule-range-label" id="scheduleRangeLabel"></div>
+              <div class="schedule-view-toggle">
+                <button class="schedule-view-button active" data-view="day">Day</button>
+                <button class="schedule-view-button" data-view="week">Week</button>
+                <button class="schedule-view-button" data-view="month">Month</button>
+              </div>
+              <div class="schedule-filters">
+                <div class="filter-chips" id="scheduleStatusFilters">
+                  <button class="filter-chip active" data-status="all">All</button>
+                  <button class="filter-chip" data-status="pending">Pending</button>
+                  <button class="filter-chip" data-status="done">Done</button>
+                  <button class="filter-chip" data-status="skipped">Skipped</button>
+                </div>
+                <div class="toggle-group">
+                  <label><input id="scheduleToggleExpected" type="checkbox" checked /> Orders</label>
+                  <label><input id="scheduleTogglePacks" type="checkbox" checked /> Packing</label>
+                  <label><input id="scheduleToggleDeliveries" type="checkbox" checked /> Deliveries</label>
+                </div>
+                <select id="scheduleRepFilter" title="Filter schedule by rep."></select>
+                <input id="scheduleSearch" type="search" placeholder="Search store or suburb" class="search" />
+              </div>
+              <div class="schedule-actions">
+                <button id="scheduleSelectModeBtn" class="btn btn-secondary select-toggle">Select</button>
+                <button id="scheduleSelectAllBtn" class="btn btn-secondary">Select all visible</button>
+                <button id="scheduleExportSelectedBtn" class="btn btn-primary">Export selected to CSV (Spoke)</button>
+              </div>
+            </div>
+            <div id="scheduleList" class="agenda"></div>
+            <div id="schedulePopover" class="schedule-popover"></div>
+          </section>
+
+          <section id="orders" class="tab-panel" aria-labelledby="Orders">
+            <div class="panel-header">
+              <h2 class="page-title">Orders</h2>
+              <div class="actions">
+                <button id="newOrderBtn" class="btn btn-primary" data-requires-online="true">Quick add order</button>
+              </div>
+            </div>
+            <div id="ordersList" class="list"></div>
+          </section>
+
+          <section id="customers" class="tab-panel" aria-labelledby="Customers">
+            <div class="panel-header">
+              <div>
+                <h2 class="page-title">Customers</h2>
+                <p class="muted">Manage customer profiles and schedules.</p>
+              </div>
+              <div class="actions">
+                <button id="newCustomerBtn" class="btn btn-primary" data-requires-online="true">+ New Customer</button>
+              </div>
+            </div>
+            <div class="filters">
+              <input id="customersSearch" type="search" placeholder="Search customers" class="search" />
+              <select id="customersRepFilter"></select>
+              <select id="customersModeFilter">
+                <option value="all">All order modes</option>
+                <option value="WE_GET_ORDER">We get order</option>
+                <option value="THEY_PUT_ORDER">Customer puts order</option>
+              </select>
+              <select id="customersFrequencyFilter">
+                <option value="all">All frequencies</option>
+                <option value="WEEKLY">Weekly</option>
+                <option value="FORTNIGHTLY">Fortnightly</option>
+                <option value="EVERY_3_WEEKS">Every 3 weeks</option>
+              </select>
+              <select id="customersChannelFilter">
+                <option value="all">All channels</option>
+                <option value="portal">Portal</option>
+                <option value="sms">SMS</option>
+                <option value="email">Email</option>
+                <option value="phone">Phone</option>
+                <option value="rep_in_person">Sales rep</option>
+              </select>
+              <select id="customersScheduleFilter">
+                <option value="all">All schedules</option>
+                <option value="scheduled">Only scheduled</option>
+                <option value="unscheduled">Not scheduled</option>
+              </select>
+            </div>
+            <div id="customersList" class="list"></div>
+          </section>
+
+          <section id="reps" class="tab-panel" aria-labelledby="Reps">
+            <div class="panel-header">
+              <h2 class="page-title">Sales reps</h2>
+              <div class="actions">
+                <button id="newRepBtn" class="btn btn-primary" data-requires-online="true">Add rep</button>
+              </div>
+            </div>
+            <div id="repsList" class="list"></div>
+          </section>
+
+          <section id="expected" class="tab-panel" aria-labelledby="Expected">
+            <div class="panel-header">
+              <h2 class="page-title">Expected orders</h2>
+              <p class="muted">Based on cadence settings per customer.</p>
+            </div>
+            <div id="expectedList" class="list"></div>
+          </section>
+
+          <section id="import" class="tab-panel" aria-labelledby="Import">
+            <div class="panel-header">
+              <h2 class="page-title">Import customers</h2>
+            </div>
+            <div class="card">
+              <p class="muted">Export your Excel sheet as CSV (UTF-8) and upload it here.</p>
+              <label>CSV file
+                <input id="importFile" type="file" accept=".csv" />
+              </label>
+              <div class="inline-grid">
+                <label>Default assigned rep*
+                  <select id="importDefaultRep"></select>
+                </label>
+                <label>Duplicate handling
+                  <select id="importDuplicateMode">
+                    <option value="update">Update existing</option>
+                    <option value="skip">Skip duplicates</option>
+                  </select>
+                </label>
+              </div>
+              <div class="card">
+                <h3>Average order value (AUD)</h3>
+                <div class="inline-grid">
+                  <label><input type="radio" name="importAovMode" value="blank" checked /> Leave blank</label>
+                  <label><input type="radio" name="importAovMode" value="single" /> Set one value</label>
+                  <label><input type="radio" name="importAovMode" value="column" /> Map from column</label>
+                </div>
+                <div class="inline-grid">
+                  <label>Single AOV value
+                    <input id="importAovValue" type="number" placeholder="e.g. 350" />
+                  </label>
+                  <label>Column mapping
+                    <select id="importAovColumn"></select>
+                  </label>
+                </div>
+              </div>
+              <div class="form-actions">
+                <button id="importPreviewBtn" class="btn btn-secondary" type="button">Preview</button>
+                <button id="importRunBtn" class="btn btn-primary" type="button" data-requires-online="true">Run import</button>
+              </div>
+              <div id="importStatus" class="muted"></div>
+            </div>
+            <div class="card">
+              <h3>Preview (first 20 rows)</h3>
+              <div id="importPreview" class="list"></div>
+            </div>
+            <div class="card">
+              <h3>Import results</h3>
+              <div id="importResults" class="muted">No import run yet.</div>
+              <button id="importReportBtn" class="btn btn-secondary" type="button">Download import report</button>
+            </div>
+          </section>
+
+          <section id="export" class="tab-panel" aria-labelledby="Export">
+            <div class="panel-header">
+              <h2 class="page-title">Export deliveries</h2>
+            </div>
+            <div class="export-grid">
+              <div class="card">
+                <h3>Export options</h3>
+                <label>Date range start
+                  <input id="exportStart" type="date" />
+                </label>
+                <label>Date range end
+                  <input id="exportEnd" type="date" />
+                </label>
+                <label>Rep
+                  <select id="exportRep"></select>
+                </label>
+                <label><input type="checkbox" id="exportIncludeCompleted" checked /> Include completed deliveries</label>
+                <label><input type="checkbox" id="exportIncludeTomorrow" /> Include tomorrow's deliveries</label>
+                <button id="exportCsvBtn" class="btn btn-primary">Download CSV</button>
+                <div id="exportSummary" class="muted"></div>
+              </div>
+              <div class="card">
+                <div class="card-header">
+                  <h3>Column mapping</h3>
+                  <div>
+                    <button id="newPresetBtn" class="btn btn-secondary">New preset</button>
+                  </div>
+                </div>
+                <label>Preset
+                  <select id="mappingPresetSelect"></select>
+                </label>
+                <div id="mappingEditor" class="mapping-editor"></div>
+                <button id="savePresetBtn" class="btn btn-primary">Save preset</button>
+              </div>
+            </div>
+          </section>
+
+          <section id="backup" class="tab-panel" aria-labelledby="Backup">
+            <div class="panel-header">
+              <h2 class="page-title">Backup & restore</h2>
+            </div>
+            <div class="backup-grid">
+              <div class="card">
+                <h3>Backup</h3>
+                <p>Export all data to a JSON file.</p>
+                <button id="backupBtn" class="btn btn-primary">Download backup</button>
+                <div id="backupStatus" class="muted"></div>
+              </div>
+              <div class="card">
+                <h3>Restore</h3>
+                <p>Import a JSON backup file.</p>
+                <input id="restoreInput" type="file" accept="application/json" />
+                <button id="restoreBtn" class="btn btn-secondary" data-requires-online="true">Restore data</button>
+              </div>
+            </div>
+          </section>
+
+          <section id="account" class="tab-panel" aria-labelledby="Account">
+            <div class="panel-header">
+              <div>
+                <h2 class="page-title">Account & Settings</h2>
+                <p class="muted">Manage sync, data tools, and settings.</p>
+              </div>
+            </div>
+            <div class="card">
+              <h3>Account</h3>
+              <p class="muted">Signed in as <strong id="accountEmail">Not logged in</strong></p>
+              <div class="form-actions">
+                <button class="btn btn-secondary" id="accountLogoutBtn">Logout</button>
+              </div>
+            </div>
+            <div class="card">
+              <h3>Tools</h3>
+              <div class="tool-grid">
+                <button class="btn btn-secondary tab" data-tab="orders">Orders</button>
+                <button class="btn btn-secondary tab" data-tab="reps">Reps</button>
+                <button class="btn btn-secondary tab" data-tab="expected">Expected Orders</button>
+                <button class="btn btn-secondary tab" data-tab="import">Import Customers</button>
+                <button class="btn btn-secondary tab" data-tab="export">Export Deliveries</button>
+                <button class="btn btn-secondary tab" data-tab="backup">Backup & Restore</button>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+      <nav class="tabs mobile-tabs" role="tablist">
+        <button class="tab active" data-tab="dashboard">Schedule</button>
+        <button class="tab" data-tab="customers">Customers</button>
+        <button class="tab" data-tab="account">Account</button>
+      </nav>
+    </div>
+  </div>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-content">
+      <button id="modalClose" class="modal-close">×</button>
+      <div id="modalBody"></div>
+    </div>
+  </div>
+
+  <div id="snackbar" class="snackbar hidden">
+    <span id="snackbarMessage"></span>
+    <button id="snackbarUndo" class="btn btn-secondary">Undo</button>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
