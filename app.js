@@ -836,7 +836,15 @@ function rangeKeys(startKey, endKey) {
 
 function buildScheduleItems(startKey, endKey) {
   const items = [];
+  const seen = new Set();
   const keys = rangeKeys(startKey, endKey);
+
+  const addItem = (item) => {
+    const key = `${item.customerId}-${item.kind}-${item.date}-${item.runIndex ?? "x"}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push(item);
+  };
 
   keys.forEach((dateKey) => {
     const dayIndex = dayIndexFromDateKey(dateKey);
@@ -863,28 +871,11 @@ function buildScheduleItems(startKey, endKey) {
           });
         }
         runs.forEach((run) => {
-          if (run.orderDay === null || run.orderDay === undefined) return;
-          if (dayIndex !== run.orderDay) return;
-          items.push({
-            id: uuid(),
-            kind: "expected_order",
-            date: dateKey,
-            customerId: customer.id,
-            repId: customer.assignedRepId,
-            runIndex: run.runIndex,
-            frequency: schedule.frequency,
-            title: customer.storeName,
-            subtitle: customer.contactName || "",
-            orderMode: schedule.mode,
-          });
-
-          const packDay = run.packDay ?? run.orderDay;
-          const packDate = nextDateForWeekday(dateKey, packDay);
-          if (packDate >= startKey && packDate <= endKey) {
-            items.push({
+          if (run.orderDay !== null && run.orderDay !== undefined && dayIndex === run.orderDay) {
+            addItem({
               id: uuid(),
-              kind: "pack",
-              date: packDate,
+              kind: "expected_order",
+              date: dateKey,
               customerId: customer.id,
               repId: customer.assignedRepId,
               runIndex: run.runIndex,
@@ -895,15 +886,27 @@ function buildScheduleItems(startKey, endKey) {
             });
           }
 
-          const deliveryDate =
-            run.deliverDay !== null && run.deliverDay !== undefined
-              ? nextDateForWeekday(dateKey, run.deliverDay)
-              : addDays(dateKey, 1);
-          if (deliveryDate >= startKey && deliveryDate <= endKey) {
-            items.push({
+          const packDay = run.packDay ?? run.orderDay;
+          if (packDay !== null && packDay !== undefined && dayIndex === packDay) {
+            addItem({
+              id: uuid(),
+              kind: "pack",
+              date: dateKey,
+              customerId: customer.id,
+              repId: customer.assignedRepId,
+              runIndex: run.runIndex,
+              frequency: schedule.frequency,
+              title: customer.storeName,
+              subtitle: customer.contactName || "",
+              orderMode: schedule.mode,
+            });
+          }
+
+          if (run.deliverDay !== null && run.deliverDay !== undefined && dayIndex === run.deliverDay) {
+            addItem({
               id: uuid(),
               kind: "delivery",
-              date: deliveryDate,
+              date: dateKey,
               customerId: customer.id,
               repId: customer.assignedRepId,
               runIndex: run.runIndex,
@@ -919,7 +922,7 @@ function buildScheduleItems(startKey, endKey) {
       if (schedule.mode === "THEY_PUT_ORDER") {
         schedule.customerOrderDays.forEach((orderDay) => {
           if (dayIndex !== orderDay) return;
-          items.push({
+          addItem({
             id: uuid(),
             kind: "expected_order",
             date: dateKey,
@@ -931,43 +934,37 @@ function buildScheduleItems(startKey, endKey) {
             subtitle: customer.contactName || "",
             orderMode: schedule.mode,
           });
-
-          const packDate = schedule.packDays?.length
-            ? nextDateForAnyWeekday(dateKey, schedule.packDays)
-            : dateKey;
-          if (packDate >= startKey && packDate <= endKey) {
-            items.push({
-              id: uuid(),
-              kind: "pack",
-              date: packDate,
-              customerId: customer.id,
-              repId: customer.assignedRepId,
-              runIndex: null,
-              frequency: schedule.frequency,
-              title: customer.storeName,
-              subtitle: customer.contactName || "",
-              orderMode: schedule.mode,
-            });
-          }
-
-          const deliveryDate = schedule.deliverDays?.length
-            ? nextDateForAnyWeekday(dateKey, schedule.deliverDays)
-            : addDays(dateKey, 1);
-          if (deliveryDate >= startKey && deliveryDate <= endKey) {
-            items.push({
-              id: uuid(),
-              kind: "delivery",
-              date: deliveryDate,
-              customerId: customer.id,
-              repId: customer.assignedRepId,
-              runIndex: null,
-              frequency: schedule.frequency,
-              title: customer.storeName,
-              subtitle: customer.contactName || "",
-              orderMode: schedule.mode,
-            });
-          }
         });
+
+        if (schedule.packDays?.includes(dayIndex)) {
+          addItem({
+            id: uuid(),
+            kind: "pack",
+            date: dateKey,
+            customerId: customer.id,
+            repId: customer.assignedRepId,
+            runIndex: null,
+            frequency: schedule.frequency,
+            title: customer.storeName,
+            subtitle: customer.contactName || "",
+            orderMode: schedule.mode,
+          });
+        }
+
+        if (schedule.deliverDays?.includes(dayIndex)) {
+          addItem({
+            id: uuid(),
+            kind: "delivery",
+            date: dateKey,
+            customerId: customer.id,
+            repId: customer.assignedRepId,
+            runIndex: null,
+            frequency: schedule.frequency,
+            title: customer.storeName,
+            subtitle: customer.contactName || "",
+            orderMode: schedule.mode,
+          });
+        }
       }
     });
   });
