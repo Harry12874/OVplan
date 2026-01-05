@@ -902,7 +902,9 @@ function buildScheduleItems(startKey, endKey) {
             });
           }
 
-          if (run.deliverDay !== null && run.deliverDay !== undefined && dayIndex === run.deliverDay) {
+          const deliverDay =
+            run.deliverDay ?? (run.orderDay !== null && run.orderDay !== undefined ? (run.orderDay + 1) % 7 : null);
+          if (deliverDay !== null && deliverDay !== undefined && dayIndex === deliverDay) {
             addItem({
               id: uuid(),
               kind: "delivery",
@@ -936,7 +938,9 @@ function buildScheduleItems(startKey, endKey) {
           });
         });
 
-        if (schedule.packDays?.includes(dayIndex)) {
+        const packDays =
+          schedule.packDays && schedule.packDays.length ? schedule.packDays : schedule.customerOrderDays;
+        if (packDays?.includes(dayIndex)) {
           addItem({
             id: uuid(),
             kind: "pack",
@@ -951,7 +955,11 @@ function buildScheduleItems(startKey, endKey) {
           });
         }
 
-        if (schedule.deliverDays?.includes(dayIndex)) {
+        const deliverDays =
+          schedule.deliverDays && schedule.deliverDays.length
+            ? schedule.deliverDays
+            : schedule.customerOrderDays.map((orderDay) => (orderDay + 1) % 7);
+        if (deliverDays?.includes(dayIndex)) {
           addItem({
             id: uuid(),
             kind: "delivery",
