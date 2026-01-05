@@ -17,11 +17,13 @@
   --space-5: 24px;
   --accent-red: #d84b3e;
   --accent-olive: #6f7d52;
-  --accent-warm: #d7a94a;
+  --accent-warm: #f7bd56;
+  --accent-warm-light: #fde5b3;
+  --accent-warm-dark: #e0a540;
   --primary: var(--accent-red);
   --primary-dark: #c24236;
   --success: #4f7d6d;
-  --warning: #d7a94a;
+  --warning: var(--accent-warm);
 }
 
 * {
@@ -569,8 +571,8 @@ label {
 }
 
 .agenda-item.skipped {
-  border-color: #fcd34d;
-  background: #fffbeb;
+  border-color: var(--accent-warm-dark);
+  background: var(--accent-warm-light);
 }
 
 .agenda-item.type-order {
