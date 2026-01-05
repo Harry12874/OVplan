@@ -146,38 +146,56 @@
                 <button id="addOneOffScheduleBtn" class="btn btn-primary" data-requires-online="true">+ One-off item</button>
               </div>
             </div>
-            <div class="schedule-toolbar">
-              <div class="schedule-nav">
-                <button id="schedulePrevBtn" class="btn btn-secondary" aria-label="Previous">←</button>
-                <button id="scheduleTodayBtn" class="btn btn-secondary">Today</button>
-                <button id="scheduleNextBtn" class="btn btn-secondary" aria-label="Next">→</button>
-                <input id="scheduleDatePicker" type="date" aria-label="Jump to date" />
-              </div>
-              <div class="schedule-range-label" id="scheduleRangeLabel"></div>
-              <div class="schedule-view-toggle">
-                <button class="schedule-view-button active" data-view="day">Day</button>
-                <button class="schedule-view-button" data-view="week">Week</button>
-                <button class="schedule-view-button" data-view="month">Month</button>
-              </div>
-              <div class="schedule-filters">
-                <div class="filter-chips" id="scheduleStatusFilters">
-                  <button class="filter-chip active" data-status="all">All</button>
-                  <button class="filter-chip" data-status="pending">Pending</button>
-                  <button class="filter-chip" data-status="done">Done</button>
-                  <button class="filter-chip" data-status="skipped">Skipped</button>
+            <div id="scheduleToolbar" class="schedule-toolbar">
+              <div class="schedule-toolbar-main">
+                <div class="schedule-toolbar-left">
+                  <div class="schedule-nav">
+                    <button id="schedulePrevBtn" class="btn btn-secondary" aria-label="Previous">←</button>
+                    <button id="scheduleTodayBtn" class="btn btn-secondary">Today</button>
+                    <button id="scheduleNextBtn" class="btn btn-secondary" aria-label="Next">→</button>
+                    <input id="scheduleDatePicker" type="date" aria-label="Jump to date" />
+                  </div>
+                  <div class="schedule-range-label" id="scheduleRangeLabel"></div>
                 </div>
-                <div class="toggle-group">
-                  <label><input id="scheduleToggleExpected" type="checkbox" checked /> Orders</label>
-                  <label><input id="scheduleTogglePacks" type="checkbox" checked /> Packing</label>
-                  <label><input id="scheduleToggleDeliveries" type="checkbox" checked /> Deliveries</label>
+                <div class="schedule-toolbar-center">
+                  <div class="schedule-view-toggle">
+                    <button class="schedule-view-button active" data-view="day">Day</button>
+                    <button class="schedule-view-button" data-view="week">Week</button>
+                    <button class="schedule-view-button" data-view="month">Month</button>
+                  </div>
+                  <div class="schedule-day-selector" aria-label="Select day">
+                    <button id="scheduleDayPrev" class="btn btn-secondary icon-btn" aria-label="Previous day">←</button>
+                    <select id="scheduleDaySelect" aria-label="Select day"></select>
+                    <button id="scheduleDayNext" class="btn btn-secondary icon-btn" aria-label="Next day">→</button>
+                  </div>
                 </div>
-                <select id="scheduleRepFilter" title="Filter schedule by rep."></select>
-                <input id="scheduleSearch" type="search" placeholder="Search store or suburb" class="search" />
-              </div>
-              <div class="schedule-actions">
-                <button id="scheduleSelectModeBtn" class="btn btn-secondary select-toggle">Select</button>
-                <button id="scheduleSelectAllBtn" class="btn btn-secondary">Select all visible</button>
-                <button id="scheduleExportSelectedBtn" class="btn btn-primary">Export selected to CSV (Spoke)</button>
+                <div class="schedule-toolbar-right">
+                  <div class="schedule-actions">
+                    <button id="scheduleSelectModeBtn" class="btn btn-secondary select-toggle">Select</button>
+                    <button id="scheduleSelectAllBtn" class="btn btn-secondary">Select all visible</button>
+                    <button id="scheduleExportSelectedBtn" class="btn btn-primary">Export selected to CSV (Spoke)</button>
+                  </div>
+                  <div class="schedule-filters-wrapper">
+                    <button id="scheduleFiltersToggle" class="btn btn-secondary" aria-expanded="false">Filters</button>
+                    <div id="scheduleFiltersPanel" class="schedule-filters-panel">
+                      <div class="schedule-filters">
+                        <div class="filter-chips" id="scheduleStatusFilters">
+                          <button class="filter-chip active" data-status="all">All</button>
+                          <button class="filter-chip" data-status="pending">Pending</button>
+                          <button class="filter-chip" data-status="done">Done</button>
+                          <button class="filter-chip" data-status="skipped">Skipped</button>
+                        </div>
+                        <div class="toggle-group">
+                          <label><input id="scheduleToggleExpected" type="checkbox" checked /> Orders</label>
+                          <label><input id="scheduleTogglePacks" type="checkbox" checked /> Packing</label>
+                          <label><input id="scheduleToggleDeliveries" type="checkbox" checked /> Deliveries</label>
+                        </div>
+                        <select id="scheduleRepFilter" title="Filter schedule by rep."></select>
+                        <input id="scheduleSearch" type="search" placeholder="Search store or suburb" class="search" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
             <div id="scheduleList" class="agenda"></div>
