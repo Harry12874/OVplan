@@ -23,7 +23,14 @@ import {
   parseCsv,
   detectNumericColumns,
 } from "./utils.js";
-import { defaultColumns, fieldOptions, buildCsv, downloadCsv } from "./export.js";
+import {
+  defaultColumns,
+  fieldOptions,
+  buildCsv,
+  downloadCsv,
+  buildSpokenitExportRecords,
+  buildTaskTitle,
+} from "./export.js";
 import { supabase, getSession, signIn, signOut } from "./supabase_client.js";
 
 const state = {
@@ -1126,6 +1133,7 @@ function exportSelectedScheduleItems() {
       task: {
         dueDate: item.date,
         assignedRepId: item.repId || "",
+        title: buildTaskTitle({ kind: "delivery", customer, order: {} }),
       },
       order: {},
       customer,
@@ -3327,6 +3335,7 @@ function orderLinesForm(orderLines = []) {
 function openOrderModal(order = {}) {
   const customer = customerById(order.customerId) || {};
   const defaultChannel = order.channel || customer.orderChannel || customer.channelPreference || "portal";
+  const defaultTaskType = order.taskType || "delivery";
   showModal(`
     <h2>${order.id ? "Edit order" : "Quick add order"}</h2>
     <form id="orderForm" class="form">
@@ -3385,6 +3394,14 @@ function openOrderModal(order = {}) {
                 `<option value="${status}" ${status === (order.status || "received") ? "selected" : ""}>${statusLabels[status]}</option>`
             )
             .join("")}
+        </select>
+      </label>
+      <label>Task type
+        <select name="taskType">
+          <option value="delivery" ${defaultTaskType === "delivery" ? "selected" : ""}>Delivery</option>
+          <option value="pickup" ${defaultTaskType === "pickup" ? "selected" : ""}>Pickup</option>
+          <option value="packing" ${defaultTaskType === "packing" ? "selected" : ""}>Packing</option>
+          <option value="other" ${defaultTaskType === "other" ? "selected" : ""}>Other</option>
         </select>
       </label>
       <label>Order lines
@@ -3480,6 +3497,7 @@ function buildOrderFromForm(data, orderId = null) {
   const deliveryOffsetDays = Number(data.deliveryOffsetDays || customer.deliveryOffsetDays || 1);
   const dueDates = computeDueDates(data.receivedAt, packOffsetDays, deliveryOffsetDays);
   const orderLines = [];
+  const taskType = data.taskType || "delivery";
 
   Object.keys(data)
     .filter((key) => key.startsWith("sku_"))
@@ -3508,6 +3526,7 @@ function buildOrderFromForm(data, orderId = null) {
     packDueDate: dueDates.packDueDate,
     deliveryDueDate: dueDates.deliveryDueDate,
     serviceTime: data.serviceTime ? Number(data.serviceTime) : null,
+    taskType,
   };
 }
 
@@ -3653,18 +3672,15 @@ function exportRecordsForRange() {
   }
   const repFilter = elements.exportRep.value;
   const includeCompleted = elements.exportIncludeCompleted.checked;
-  const tasks = state.tasks.filter((task) => {
-    if (task.type !== "deliver") return false;
-    if (!includeCompleted && task.status === "done") return false;
-    if (task.dueDate < start || task.dueDate > end) return false;
-    if (repFilter !== "all" && task.assignedRepId !== repFilter) return false;
-    return true;
-  });
-  return tasks.map((task) => {
-    const order = orderById(task.orderId) || {};
-    const customer = customerById(task.customerId) || {};
-    const rep = state.reps.find((item) => item.id === task.assignedRepId) || {};
-    return { task, order, customer, rep };
+  return buildSpokenitExportRecords({
+    tasks: state.tasks,
+    orders: state.orders,
+    customers: state.customers,
+    reps: state.reps,
+    start,
+    end,
+    repFilter,
+    includeCompleted,
   });
 }
 
