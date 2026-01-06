@@ -161,6 +161,9 @@ function loadElements() {
     restoreBtn: document.getElementById("restoreBtn"),
     backupStatus: document.getElementById("backupStatus"),
     newStickyNoteBtn: document.getElementById("newStickyNoteBtn"),
+    stickyNotesAuth: document.getElementById("stickyNotesAuth"),
+    stickyNotesSignIn: document.getElementById("stickyNotesSignIn"),
+    stickyNotesContent: document.getElementById("stickyNotesContent"),
     stickyNotesSearch: document.getElementById("stickyNotesSearch"),
     stickyNotesCustomerFilter: document.getElementById("stickyNotesCustomerFilter"),
     stickyNotesSort: document.getElementById("stickyNotesSort"),
@@ -424,6 +427,7 @@ const defaultSettings = {
   ],
   activeExportPresetId: "default",
   lastBackupAt: null,
+  stickyNotesUserId: null,
   scheduleView: {
     toggles: {
       expectedOrders: true,
@@ -500,6 +504,17 @@ function isNetworkFailure(error) {
     message.includes("Failed to fetch") ||
     message.includes("NetworkError") ||
     message.includes("Network request failed")
+  );
+}
+
+function isRlsError(error) {
+  const message = (error?.message || "").toLowerCase();
+  return (
+    error?.code === "42501" ||
+    error?.status === 401 ||
+    error?.status === 403 ||
+    message.includes("row-level security") ||
+    message.includes("permission denied")
   );
 }
 
@@ -615,7 +630,7 @@ function disableFormIfOffline(formId) {
   });
 }
 
-async function loadState({ useLocalCustomers = true, useLocalScheduleEvents = true } = {}) {
+async function loadState({ useLocalCustomers = true, useLocalScheduleEvents = true, stickyNotesUserId = null } = {}) {
   state.reps = await getAll("reps");
   state.customers = useLocalCustomers ? await getAll("customers") : [];
   state.orders = await getAll("orders");
@@ -651,6 +666,18 @@ async function loadState({ useLocalCustomers = true, useLocalScheduleEvents = tr
       state.settings.app.scheduleView.anchorDate || defaultSettings.scheduleView.anchorDate;
     state.settings.app.scheduleView.searchTerm =
       state.settings.app.scheduleView.searchTerm ?? defaultSettings.scheduleView.searchTerm;
+  }
+
+  if (stickyNotesUserId) {
+    const storedUserId = state.settings.app.stickyNotesUserId;
+    if (storedUserId && storedUserId !== stickyNotesUserId) {
+      await clearStore("sticky_notes");
+      state.stickyNotes = [];
+    }
+    if (storedUserId !== stickyNotesUserId) {
+      state.settings.app.stickyNotesUserId = stickyNotesUserId;
+      await saveSettings();
+    }
   }
 
   let customersUpdated = false;
@@ -1440,6 +1467,15 @@ function mapStickyNoteToSupabase(note) {
     created_at: note.created_at,
     updated_at: note.updated_at,
   };
+}
+
+function mapStickyNoteInsertPayload(note) {
+  return mapStickyNoteToSupabase(note);
+}
+
+function mapStickyNoteUpdatePayload(note) {
+  const { id, created_at, ...payload } = mapStickyNoteToSupabase(note);
+  return payload;
 }
 
 async function syncUpsertBatch(table, records, mapper, { onProgress } = {}) {
@@ -2624,8 +2660,8 @@ async function setScheduleEventStatus(item, status, details = {}) {
     updateConnectionStatus({ status: "Online/Synced", canWrite: true });
     setCloudStatus("synced", toISO());
   } catch (error) {
-    console.error("Supabase upsert failed", error);
-    handleSupabaseError(error, { context: "Supabase upsert failed", alertOnOffline: true });
+    console.error("Supabase insert failed", error);
+    handleSupabaseError(error, { context: "Supabase insert failed", alertOnOffline: true });
     return;
   }
   if (existing) {
@@ -3829,6 +3865,22 @@ function renderStickyNotesFilters() {
   }
 }
 
+function updateStickyNotesAuthUI() {
+  if (!elements.stickyNotesAuth || !elements.stickyNotesContent) return;
+  const needsAuth = !state.session;
+  elements.stickyNotesAuth.classList.toggle("hidden", !needsAuth);
+  elements.stickyNotesContent.classList.toggle("hidden", needsAuth);
+  if (elements.newStickyNoteBtn) {
+    elements.newStickyNoteBtn.classList.toggle("hidden", needsAuth);
+  }
+  if (elements.stickyNotesSignIn) {
+    elements.stickyNotesSignIn.disabled = !supabaseAvailable;
+  }
+  if (needsAuth && elements.stickyNotesSections) {
+    elements.stickyNotesSections.innerHTML = "";
+  }
+}
+
 function stickyNoteCard(note) {
   const createdLabel = note.created_at ? formatDateTime(note.created_at) : "—";
   const updatedLabel = note.updated_at ? formatDateTime(note.updated_at) : createdLabel;
@@ -3880,6 +3932,8 @@ function stickyNotesSection(title, notes, { open = false } = {}) {
 
 function renderStickyNotes() {
   if (!elements.stickyNotesSections) return;
+  updateStickyNotesAuthUI();
+  if (!state.session) return;
   renderStickyNotesFilters();
   const query = elements.stickyNotesSearch?.value.trim() || "";
   const customerId = elements.stickyNotesCustomerFilter?.value || "all";
@@ -3900,7 +3954,18 @@ function renderStickyNotes() {
   elements.stickyNotesSections.innerHTML = sections.join("");
 }
 
+function stickyNotesPermissionMessage() {
+  showSnackbar("You don’t have permission to modify this note.");
+}
+
+function stickyNotesRequireSession() {
+  if (state.session) return false;
+  showSnackbar("Sign in to manage sticky notes.");
+  return true;
+}
+
 async function createStickyNote(payload) {
+  if (stickyNotesRequireSession()) return;
   if (!canWrite()) {
     showOfflineAlert();
     return;
@@ -3922,22 +3987,25 @@ async function createStickyNote(payload) {
   showSnackbar("Sticky note created.");
   try {
     setCloudStatus("syncing");
-    const { error } = await supabase.from("sticky_notes").upsert(mapStickyNoteToSupabase(note), {
-      onConflict: "id",
-    });
+    const { error } = await supabase.from("sticky_notes").insert(mapStickyNoteInsertPayload(note));
     if (error) throw error;
     setCloudStatus("synced", toISO());
   } catch (error) {
-    console.error("Supabase upsert failed", error);
-    handleSupabaseError(error, { context: "Supabase upsert failed", alertOnOffline: true });
+    console.error("Supabase update failed", error);
+    handleSupabaseError(error, { context: "Supabase update failed", alertOnOffline: true });
     state.stickyNotes = state.stickyNotes.filter((item) => item.id !== note.id);
     await deleteItem("sticky_notes", note.id);
     renderStickyNotes();
-    showSnackbar("Failed to save note.");
+    if (isRlsError(error)) {
+      stickyNotesPermissionMessage();
+    } else {
+      showSnackbar("Failed to save note.");
+    }
   }
 }
 
 async function updateStickyNote(noteId, patch) {
+  if (stickyNotesRequireSession()) return;
   if (!canWrite()) {
     showOfflineAlert();
     return;
@@ -3955,9 +4023,10 @@ async function updateStickyNote(noteId, patch) {
   showSnackbar("Sticky note updated.");
   try {
     setCloudStatus("syncing");
-    const { error } = await supabase.from("sticky_notes").upsert(mapStickyNoteToSupabase(updated), {
-      onConflict: "id",
-    });
+    const { error } = await supabase
+      .from("sticky_notes")
+      .update(mapStickyNoteUpdatePayload(updated))
+      .eq("id", noteId);
     if (error) throw error;
     setCloudStatus("synced", toISO());
   } catch (error) {
@@ -3966,11 +4035,16 @@ async function updateStickyNote(noteId, patch) {
     state.stickyNotes = state.stickyNotes.map((note) => (note.id === noteId ? existing : note));
     await put("sticky_notes", existing);
     renderStickyNotes();
-    showSnackbar("Failed to update note.");
+    if (isRlsError(error)) {
+      stickyNotesPermissionMessage();
+    } else {
+      showSnackbar("Failed to update note.");
+    }
   }
 }
 
 async function deleteStickyNote(noteId) {
+  if (stickyNotesRequireSession()) return;
   if (!canWrite()) {
     showOfflineAlert();
     return;
@@ -3992,7 +4066,11 @@ async function deleteStickyNote(noteId) {
     state.stickyNotes.unshift(existing);
     await put("sticky_notes", existing);
     renderStickyNotes();
-    showSnackbar("Failed to delete note.");
+    if (isRlsError(error)) {
+      stickyNotesPermissionMessage();
+    } else {
+      showSnackbar("Failed to delete note.");
+    }
   }
 }
 
@@ -4409,9 +4487,13 @@ async function handleSession(session) {
   });
   const loadResult = await loadFromSupabase();
   if (loadResult?.status === "error") {
-    await loadState({ useLocalCustomers: false, useLocalScheduleEvents: false });
+    await loadState({
+      useLocalCustomers: false,
+      useLocalScheduleEvents: false,
+      stickyNotesUserId: session.user?.id || null,
+    });
   } else {
-    await loadState();
+    await loadState({ stickyNotesUserId: session.user?.id || null });
   }
   renderAll();
 }
@@ -4488,6 +4570,13 @@ function setupEvents() {
   on(elements.customersChannelFilter, "change", renderCustomers);
   on(elements.customersScheduleFilter, "change", renderCustomers);
   on(elements.newStickyNoteBtn, "click", () => openStickyNoteModal());
+  on(elements.stickyNotesSignIn, "click", () => {
+    if (!supabaseAvailable) {
+      showSnackbar("Cloud sign-in is unavailable on this device.");
+      return;
+    }
+    showLoginScreen();
+  });
   on(elements.stickyNotesSearch, "input", renderStickyNotes);
   on(elements.stickyNotesCustomerFilter, "change", renderStickyNotes);
   on(elements.stickyNotesSort, "change", renderStickyNotes);
