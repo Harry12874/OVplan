@@ -863,19 +863,90 @@ async function removeTasksForOrder(orderId) {
   state.tasks = state.tasks.filter((task) => task.orderId !== orderId);
 }
 
+const tabRoutes = {
+  dashboard: "/schedule",
+  customers: "/customers",
+  account: "/account",
+  "sticky-notes": "/sticky-notes",
+};
+
+const routeToTab = {
+  "/": "dashboard",
+  "/schedule": "dashboard",
+  "/customers": "customers",
+  "/account": "account",
+  "/sticky-notes": "sticky-notes",
+};
+
+const legacyRouteToTab = {
+  "/settings/sticky-notes": "sticky-notes",
+};
+
+function normalizePath(pathname) {
+  if (pathname === "/index.html") {
+    return "/";
+  }
+  if (pathname.length > 1 && pathname.endsWith("/")) {
+    return pathname.slice(0, -1);
+  }
+  return pathname;
+}
+
+function resolveTabFromLocation() {
+  const normalizedPath = normalizePath(window.location.pathname);
+  if (legacyRouteToTab[normalizedPath]) {
+    const legacyTab = legacyRouteToTab[normalizedPath];
+    return {
+      tab: legacyTab,
+      canonicalPath: tabRoutes[legacyTab],
+    };
+  }
+  if (routeToTab[normalizedPath]) {
+    return { tab: routeToTab[normalizedPath], canonicalPath: normalizedPath };
+  }
+  const hashTab = window.location.hash.replace("#", "");
+  if (hashTab && document.getElementById(hashTab)) {
+    return { tab: hashTab, canonicalPath: null };
+  }
+  return { tab: "dashboard", canonicalPath: tabRoutes.dashboard };
+}
+
+function updateLocationForTab(tabId) {
+  const route = tabRoutes[tabId];
+  if (route) {
+    const url = new URL(window.location.href);
+    url.pathname = route;
+    url.hash = "";
+    window.history.pushState({}, "", url);
+    return;
+  }
+  if (tabId) {
+    const url = new URL(window.location.href);
+    url.hash = tabId;
+    window.history.pushState({}, "", url);
+  }
+}
+
+function setActiveTab(target, { updateHistory = true } = {}) {
+  if (!target) return;
+  elements.tabs.forEach((t) => t.classList.remove("active"));
+  elements.tabs.forEach((t) => {
+    if (t.dataset.tab === target) {
+      t.classList.add("active");
+    }
+  });
+  elements.panels.forEach((panel) => {
+    panel.classList.toggle("active", panel.id === target);
+  });
+  if (updateHistory) {
+    updateLocationForTab(target);
+  }
+}
+
 function renderTabs() {
   elements.tabs.forEach((tab) => {
     tab.addEventListener("click", () => {
-      elements.tabs.forEach((t) => t.classList.remove("active"));
-      const target = tab.dataset.tab;
-      elements.tabs.forEach((t) => {
-        if (t.dataset.tab === target) {
-          t.classList.add("active");
-        }
-      });
-      elements.panels.forEach((panel) => {
-        panel.classList.toggle("active", panel.id === target);
-      });
+      setActiveTab(tab.dataset.tab);
     });
   });
 }
@@ -4803,6 +4874,22 @@ async function init() {
   await initDB();
   await loadState();
   renderTabs();
+  const { tab, canonicalPath } = resolveTabFromLocation();
+  setActiveTab(tab, { updateHistory: false });
+  if (canonicalPath && normalizePath(window.location.pathname) !== canonicalPath) {
+    const url = new URL(window.location.href);
+    url.pathname = canonicalPath;
+    url.hash = "";
+    window.history.replaceState({}, "", url);
+  }
+  window.addEventListener("popstate", () => {
+    const { tab: nextTab } = resolveTabFromLocation();
+    setActiveTab(nextTab, { updateHistory: false });
+  });
+  window.addEventListener("hashchange", () => {
+    const { tab: nextTab } = resolveTabFromLocation();
+    setActiveTab(nextTab, { updateHistory: false });
+  });
   renderExport();
   setupEvents();
   setupAuthEvents();
