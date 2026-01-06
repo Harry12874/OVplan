@@ -1,5 +1,5 @@
 const DB_NAME = "orchard_valley_planner";
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 const STORES = [
   "reps",
   "customers",
@@ -8,6 +8,7 @@ const STORES = [
   "settings",
   "schedule_events",
   "one_off_items",
+  "sticky_notes",
 ];
 
 let dbPromise = null;
@@ -144,6 +145,11 @@ const idbAdapter = {
                 cursor.continue();
               }
             };
+          }
+          if (event.oldVersion < 6) {
+            if (!db.objectStoreNames.contains("sticky_notes")) {
+              db.createObjectStore("sticky_notes", { keyPath: "id" });
+            }
           }
         };
         request.onsuccess = () => resolve(request.result);
