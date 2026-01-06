@@ -13,6 +13,17 @@
       Offline: changes can’t sync yet.
     </div>
     <div id="syncErrorBanner" class="sync-error-banner hidden"></div>
+    <div id="errorScreen" class="error-screen hidden" role="alert" aria-live="assertive">
+      <div class="error-card">
+        <h2>Something went wrong</h2>
+        <p class="muted">Please reload the page. If the issue persists, copy the error details.</p>
+        <div class="error-actions">
+          <button id="errorReloadBtn" class="btn btn-primary">Reload</button>
+          <button id="errorCopyBtn" class="btn btn-secondary">Copy error details</button>
+        </div>
+        <pre id="errorDetails" class="error-details"></pre>
+      </div>
+    </div>
 
     <div id="loginScreen" class="login-screen hidden">
       <div class="login-card">

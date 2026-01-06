@@ -31,7 +31,14 @@ import {
   buildSpokenitExportRecords,
   buildTaskTitle,
 } from "./export.js";
-import { supabase, getSession, signIn, signOut } from "./supabase_client.js";
+import {
+  supabase,
+  getSession,
+  signIn,
+  signOut,
+  supabaseAvailable,
+  supabaseInitError,
+} from "./supabase_client.js";
 
 const state = {
   reps: [],
@@ -67,6 +74,10 @@ const elements = {
   statusIndicator: document.getElementById("statusIndicator"),
   offlineBanner: document.getElementById("offlineBanner"),
   syncErrorBanner: document.getElementById("syncErrorBanner"),
+  errorScreen: document.getElementById("errorScreen"),
+  errorReloadBtn: document.getElementById("errorReloadBtn"),
+  errorCopyBtn: document.getElementById("errorCopyBtn"),
+  errorDetails: document.getElementById("errorDetails"),
   cloudStatus: document.getElementById("cloudStatus"),
   tabs: document.querySelectorAll(".tab[data-tab]"),
   panels: document.querySelectorAll(".tab-panel"),
@@ -204,6 +215,55 @@ const orderTermsMap = orderTermsOptions.reduce((acc, option) => {
   acc[option.label.toLowerCase()] = option.value;
   return acc;
 }, {});
+
+let latestErrorDetails = "";
+
+function formatErrorDetails(error, context) {
+  const message = error?.message || String(error);
+  const stack = error?.stack ? `\n\n${error.stack}` : "";
+  const timestamp = new Date().toISOString();
+  return `[${timestamp}] ${context}\n${message}${stack}`;
+}
+
+function showErrorScreen(error, context = "Unexpected error") {
+  const details = formatErrorDetails(error, context);
+  latestErrorDetails = details;
+  if (elements.errorDetails) {
+    elements.errorDetails.textContent = details;
+  }
+  if (elements.errorScreen) {
+    elements.errorScreen.classList.remove("hidden");
+  }
+  console.error(context, error);
+}
+
+function setupGlobalErrorHandling() {
+  window.addEventListener("error", (event) => {
+    const error = event.error || new Error(event.message || "Unknown error");
+    showErrorScreen(error, "Runtime error");
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    const error = event.reason instanceof Error ? event.reason : new Error(String(event.reason));
+    showErrorScreen(error, "Unhandled promise rejection");
+  });
+  if (elements.errorReloadBtn) {
+    elements.errorReloadBtn.addEventListener("click", () => window.location.reload());
+  }
+  if (elements.errorCopyBtn) {
+    elements.errorCopyBtn.addEventListener("click", async () => {
+      if (!latestErrorDetails) return;
+      try {
+        await navigator.clipboard.writeText(latestErrorDetails);
+        elements.errorCopyBtn.textContent = "Copied!";
+        setTimeout(() => {
+          elements.errorCopyBtn.textContent = "Copy error details";
+        }, 2000);
+      } catch (error) {
+        console.error("Failed to copy error details", error);
+      }
+    });
+  }
+}
 
 function orderTermsLabelFromChannel(channel) {
   return orderTermsOptions.find((option) => option.value === channel)?.label || "";
@@ -3888,6 +3948,15 @@ async function handleSession(session) {
 }
 
 function setupAuthEvents() {
+  if (!supabaseAvailable) {
+    setLoginError("Cloud sign-in is unavailable. Continue in local-only mode.");
+    if (elements.loginForm) {
+      elements.loginForm
+        .querySelectorAll("input, button")
+        .forEach((input) => (input.disabled = true));
+    }
+    return;
+  }
   if (elements.loginForm) {
     elements.loginForm.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -4149,6 +4218,7 @@ async function init() {
   if (!appRoot) {
     console.warn("Missing #appRoot - UI not rendered yet");
   }
+  setupGlobalErrorHandling();
   await initDB();
   await loadState();
   renderTabs();
@@ -4156,8 +4226,23 @@ async function init() {
   setupEvents();
   setupAuthEvents();
   updateCloudStatusText();
+  if (!supabaseAvailable) {
+    console.error("Supabase client unavailable", supabaseInitError);
+    showAppShell();
+    setSyncError("Cloud sync unavailable. Running in local-only mode.");
+    updateConnectionStatus({
+      online: navigator.onLine,
+      canWrite: true,
+      status: "Offline/Local",
+      email: "",
+    });
+    renderAll();
+    return;
+  }
   const { data } = await getSession();
   await handleSession(data?.session || null);
 }
 
-init();
+init().catch((error) => {
+  showErrorScreen(error, "Initialization error");
+});
