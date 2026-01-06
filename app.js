@@ -38,7 +38,11 @@ import {
   signOut,
   supabaseAvailable,
   supabaseInitError,
+  validateSupabaseConfig,
 } from "./supabase_client.js";
+
+const BUILD_ID = new URL(import.meta.url).searchParams.get("v") || "dev";
+// TODO: Replace "dev" fallback with a build-time injected value.
 
 const state = {
   reps: [],
@@ -61,114 +65,118 @@ const state = {
   },
 };
 
-const elements = {
-  appShell: document.getElementById("appShell"),
-  loginScreen: document.getElementById("loginScreen"),
-  loginForm: document.getElementById("loginForm"),
-  loginEmail: document.getElementById("loginEmail"),
-  loginPassword: document.getElementById("loginPassword"),
-  loginShowPassword: document.getElementById("loginShowPassword"),
-  loginError: document.getElementById("loginError"),
-  loginLoading: document.getElementById("loginLoading"),
-  logoutBtn: document.getElementById("logoutBtn"),
-  statusIndicator: document.getElementById("statusIndicator"),
-  offlineBanner: document.getElementById("offlineBanner"),
-  syncErrorBanner: document.getElementById("syncErrorBanner"),
-  errorScreen: document.getElementById("errorScreen"),
-  errorReloadBtn: document.getElementById("errorReloadBtn"),
-  errorCopyBtn: document.getElementById("errorCopyBtn"),
-  errorDetails: document.getElementById("errorDetails"),
-  cloudStatus: document.getElementById("cloudStatus"),
-  tabs: document.querySelectorAll(".tab[data-tab]"),
-  panels: document.querySelectorAll(".tab-panel"),
-  dashboardRepFilter: document.getElementById("dashboardRepFilter"),
-  dashboardSearch: document.getElementById("dashboardSearch"),
-  todayOrdersPutList: document.getElementById("todayOrdersPutList"),
-  todayOrdersGetList: document.getElementById("todayOrdersGetList"),
-  todayPacksList: document.getElementById("todayPacksList"),
-  todayDeliveriesList: document.getElementById("todayDeliveriesList"),
-  todayOrdersPutCount: document.getElementById("todayOrdersPutCount"),
-  todayOrdersGetCount: document.getElementById("todayOrdersGetCount"),
-  todayPacksCount: document.getElementById("todayPacksCount"),
-  todayDeliveriesCount: document.getElementById("todayDeliveriesCount"),
-  addOneOffTodayBtn: document.getElementById("addOneOffTodayBtn"),
-  todayToggleExpected: document.getElementById("todayToggleExpected"),
-  todayTogglePacks: document.getElementById("todayTogglePacks"),
-  todayToggleDeliveries: document.getElementById("todayToggleDeliveries"),
-  todayStatusFilters: document.getElementById("todayStatusFilters"),
-  ordersList: document.getElementById("ordersList"),
-  customersList: document.getElementById("customersList"),
-  repsList: document.getElementById("repsList"),
-  expectedList: document.getElementById("expectedList"),
-  customersSearch: document.getElementById("customersSearch"),
-  customersRepFilter: document.getElementById("customersRepFilter"),
-  customersModeFilter: document.getElementById("customersModeFilter"),
-  customersFrequencyFilter: document.getElementById("customersFrequencyFilter"),
-  customersChannelFilter: document.getElementById("customersChannelFilter"),
-  customersScheduleFilter: document.getElementById("customersScheduleFilter"),
-  scheduleRepFilter: document.getElementById("scheduleRepFilter"),
-  scheduleToggleExpected: document.getElementById("scheduleToggleExpected"),
-  scheduleTogglePacks: document.getElementById("scheduleTogglePacks"),
-  scheduleToggleDeliveries: document.getElementById("scheduleToggleDeliveries"),
-  scheduleStatusFilters: document.getElementById("scheduleStatusFilters"),
-  scheduleList: document.getElementById("scheduleList"),
-  addOneOffScheduleBtn: document.getElementById("addOneOffScheduleBtn"),
-  scheduleViewButtons: document.querySelectorAll(".schedule-view-button"),
-  schedulePrevBtn: document.getElementById("schedulePrevBtn"),
-  scheduleNextBtn: document.getElementById("scheduleNextBtn"),
-  scheduleTodayBtn: document.getElementById("scheduleTodayBtn"),
-  scheduleDatePicker: document.getElementById("scheduleDatePicker"),
-  scheduleRangeLabel: document.getElementById("scheduleRangeLabel"),
-  scheduleSearch: document.getElementById("scheduleSearch"),
-  scheduleFiltersToggle: document.getElementById("scheduleFiltersToggle"),
-  scheduleFiltersPanel: document.getElementById("scheduleFiltersPanel"),
-  scheduleToolbar: document.getElementById("scheduleToolbar"),
-  scheduleDaySelect: document.getElementById("scheduleDaySelect"),
-  scheduleDayPrev: document.getElementById("scheduleDayPrev"),
-  scheduleDayNext: document.getElementById("scheduleDayNext"),
-  exportStart: document.getElementById("exportStart"),
-  exportEnd: document.getElementById("exportEnd"),
-  exportRep: document.getElementById("exportRep"),
-  exportIncludeCompleted: document.getElementById("exportIncludeCompleted"),
-  exportIncludeTomorrow: document.getElementById("exportIncludeTomorrow"),
-  exportSummary: document.getElementById("exportSummary"),
-  mappingPresetSelect: document.getElementById("mappingPresetSelect"),
-  mappingEditor: document.getElementById("mappingEditor"),
-  newPresetBtn: document.getElementById("newPresetBtn"),
-  savePresetBtn: document.getElementById("savePresetBtn"),
-  exportCsvBtn: document.getElementById("exportCsvBtn"),
-  importFile: document.getElementById("importFile"),
-  importDefaultRep: document.getElementById("importDefaultRep"),
-  importDuplicateMode: document.getElementById("importDuplicateMode"),
-  importAovValue: document.getElementById("importAovValue"),
-  importAovColumn: document.getElementById("importAovColumn"),
-  importPreviewBtn: document.getElementById("importPreviewBtn"),
-  importRunBtn: document.getElementById("importRunBtn"),
-  importPreview: document.getElementById("importPreview"),
-  importStatus: document.getElementById("importStatus"),
-  importResults: document.getElementById("importResults"),
-  importReportBtn: document.getElementById("importReportBtn"),
-  backupBtn: document.getElementById("backupBtn"),
-  restoreInput: document.getElementById("restoreInput"),
-  restoreBtn: document.getElementById("restoreBtn"),
-  backupStatus: document.getElementById("backupStatus"),
-  newOrderBtn: document.getElementById("newOrderBtn"),
-  newCustomerBtn: document.getElementById("newCustomerBtn"),
-  newRepBtn: document.getElementById("newRepBtn"),
-  sampleDataBtn: document.getElementById("sampleDataBtn"),
-  helpBtn: document.getElementById("helpBtn"),
-  modal: document.getElementById("modal"),
-  modalBody: document.getElementById("modalBody"),
-  modalClose: document.getElementById("modalClose"),
-  snackbar: document.getElementById("snackbar"),
-  snackbarMessage: document.getElementById("snackbarMessage"),
-  snackbarUndo: document.getElementById("snackbarUndo"),
-  accountEmail: document.getElementById("accountEmail"),
-  accountLogoutBtn: document.getElementById("accountLogoutBtn"),
-  scheduleSelectModeBtn: document.getElementById("scheduleSelectModeBtn"),
-  scheduleSelectAllBtn: document.getElementById("scheduleSelectAllBtn"),
-  scheduleExportSelectedBtn: document.getElementById("scheduleExportSelectedBtn"),
-};
+let elements = {};
+
+function loadElements() {
+  elements = {
+    appShell: document.getElementById("appShell"),
+    loginScreen: document.getElementById("loginScreen"),
+    loginForm: document.getElementById("loginForm"),
+    loginEmail: document.getElementById("loginEmail"),
+    loginPassword: document.getElementById("loginPassword"),
+    loginShowPassword: document.getElementById("loginShowPassword"),
+    loginError: document.getElementById("loginError"),
+    loginLoading: document.getElementById("loginLoading"),
+    logoutBtn: document.getElementById("logoutBtn"),
+    statusIndicator: document.getElementById("statusIndicator"),
+    offlineBanner: document.getElementById("offlineBanner"),
+    syncErrorBanner: document.getElementById("syncErrorBanner"),
+    errorScreen: document.getElementById("errorScreen"),
+    errorReloadBtn: document.getElementById("errorReloadBtn"),
+    errorCopyBtn: document.getElementById("errorCopyBtn"),
+    errorDetails: document.getElementById("errorDetails"),
+    cloudStatus: document.getElementById("cloudStatus"),
+    tabs: document.querySelectorAll(".tab[data-tab]"),
+    panels: document.querySelectorAll(".tab-panel"),
+    dashboardRepFilter: document.getElementById("dashboardRepFilter"),
+    dashboardSearch: document.getElementById("dashboardSearch"),
+    todayOrdersPutList: document.getElementById("todayOrdersPutList"),
+    todayOrdersGetList: document.getElementById("todayOrdersGetList"),
+    todayPacksList: document.getElementById("todayPacksList"),
+    todayDeliveriesList: document.getElementById("todayDeliveriesList"),
+    todayOrdersPutCount: document.getElementById("todayOrdersPutCount"),
+    todayOrdersGetCount: document.getElementById("todayOrdersGetCount"),
+    todayPacksCount: document.getElementById("todayPacksCount"),
+    todayDeliveriesCount: document.getElementById("todayDeliveriesCount"),
+    addOneOffTodayBtn: document.getElementById("addOneOffTodayBtn"),
+    todayToggleExpected: document.getElementById("todayToggleExpected"),
+    todayTogglePacks: document.getElementById("todayTogglePacks"),
+    todayToggleDeliveries: document.getElementById("todayToggleDeliveries"),
+    todayStatusFilters: document.getElementById("todayStatusFilters"),
+    ordersList: document.getElementById("ordersList"),
+    customersList: document.getElementById("customersList"),
+    repsList: document.getElementById("repsList"),
+    expectedList: document.getElementById("expectedList"),
+    customersSearch: document.getElementById("customersSearch"),
+    customersRepFilter: document.getElementById("customersRepFilter"),
+    customersModeFilter: document.getElementById("customersModeFilter"),
+    customersFrequencyFilter: document.getElementById("customersFrequencyFilter"),
+    customersChannelFilter: document.getElementById("customersChannelFilter"),
+    customersScheduleFilter: document.getElementById("customersScheduleFilter"),
+    scheduleRepFilter: document.getElementById("scheduleRepFilter"),
+    scheduleToggleExpected: document.getElementById("scheduleToggleExpected"),
+    scheduleTogglePacks: document.getElementById("scheduleTogglePacks"),
+    scheduleToggleDeliveries: document.getElementById("scheduleToggleDeliveries"),
+    scheduleStatusFilters: document.getElementById("scheduleStatusFilters"),
+    scheduleList: document.getElementById("scheduleList"),
+    addOneOffScheduleBtn: document.getElementById("addOneOffScheduleBtn"),
+    scheduleViewButtons: document.querySelectorAll(".schedule-view-button"),
+    schedulePrevBtn: document.getElementById("schedulePrevBtn"),
+    scheduleNextBtn: document.getElementById("scheduleNextBtn"),
+    scheduleTodayBtn: document.getElementById("scheduleTodayBtn"),
+    scheduleDatePicker: document.getElementById("scheduleDatePicker"),
+    scheduleRangeLabel: document.getElementById("scheduleRangeLabel"),
+    scheduleSearch: document.getElementById("scheduleSearch"),
+    scheduleFiltersToggle: document.getElementById("scheduleFiltersToggle"),
+    scheduleFiltersPanel: document.getElementById("scheduleFiltersPanel"),
+    scheduleToolbar: document.getElementById("scheduleToolbar"),
+    scheduleDaySelect: document.getElementById("scheduleDaySelect"),
+    scheduleDayPrev: document.getElementById("scheduleDayPrev"),
+    scheduleDayNext: document.getElementById("scheduleDayNext"),
+    exportStart: document.getElementById("exportStart"),
+    exportEnd: document.getElementById("exportEnd"),
+    exportRep: document.getElementById("exportRep"),
+    exportIncludeCompleted: document.getElementById("exportIncludeCompleted"),
+    exportIncludeTomorrow: document.getElementById("exportIncludeTomorrow"),
+    exportSummary: document.getElementById("exportSummary"),
+    mappingPresetSelect: document.getElementById("mappingPresetSelect"),
+    mappingEditor: document.getElementById("mappingEditor"),
+    newPresetBtn: document.getElementById("newPresetBtn"),
+    savePresetBtn: document.getElementById("savePresetBtn"),
+    exportCsvBtn: document.getElementById("exportCsvBtn"),
+    importFile: document.getElementById("importFile"),
+    importDefaultRep: document.getElementById("importDefaultRep"),
+    importDuplicateMode: document.getElementById("importDuplicateMode"),
+    importAovValue: document.getElementById("importAovValue"),
+    importAovColumn: document.getElementById("importAovColumn"),
+    importPreviewBtn: document.getElementById("importPreviewBtn"),
+    importRunBtn: document.getElementById("importRunBtn"),
+    importPreview: document.getElementById("importPreview"),
+    importStatus: document.getElementById("importStatus"),
+    importResults: document.getElementById("importResults"),
+    importReportBtn: document.getElementById("importReportBtn"),
+    backupBtn: document.getElementById("backupBtn"),
+    restoreInput: document.getElementById("restoreInput"),
+    restoreBtn: document.getElementById("restoreBtn"),
+    backupStatus: document.getElementById("backupStatus"),
+    newOrderBtn: document.getElementById("newOrderBtn"),
+    newCustomerBtn: document.getElementById("newCustomerBtn"),
+    newRepBtn: document.getElementById("newRepBtn"),
+    sampleDataBtn: document.getElementById("sampleDataBtn"),
+    helpBtn: document.getElementById("helpBtn"),
+    modal: document.getElementById("modal"),
+    modalBody: document.getElementById("modalBody"),
+    modalClose: document.getElementById("modalClose"),
+    snackbar: document.getElementById("snackbar"),
+    snackbarMessage: document.getElementById("snackbarMessage"),
+    snackbarUndo: document.getElementById("snackbarUndo"),
+    accountEmail: document.getElementById("accountEmail"),
+    accountLogoutBtn: document.getElementById("accountLogoutBtn"),
+    scheduleSelectModeBtn: document.getElementById("scheduleSelectModeBtn"),
+    scheduleSelectAllBtn: document.getElementById("scheduleSelectAllBtn"),
+    scheduleExportSelectedBtn: document.getElementById("scheduleExportSelectedBtn"),
+  };
+}
 
 const statusLabels = {
   received: "Received",
@@ -218,11 +226,74 @@ const orderTermsMap = orderTermsOptions.reduce((acc, option) => {
 
 let latestErrorDetails = "";
 
+function ensureAppRoot() {
+  let appRoot = document.getElementById("appRoot");
+  if (!appRoot) {
+    appRoot = document.createElement("div");
+    appRoot.id = "appRoot";
+    document.body.appendChild(appRoot);
+  }
+  return appRoot;
+}
+
 function formatErrorDetails(error, context) {
   const message = error?.message || String(error);
   const stack = error?.stack ? `\n\n${error.stack}` : "";
   const timestamp = new Date().toISOString();
   return `[${timestamp}] ${context}\n${message}${stack}`;
+}
+
+function renderBootstrapError(error) {
+  const appRoot = ensureAppRoot();
+  const message = error?.message || String(error);
+  const stack = error?.stack || "";
+  appRoot.innerHTML = "";
+  appRoot.style.minHeight = "100vh";
+  appRoot.style.display = "flex";
+  appRoot.style.alignItems = "center";
+  appRoot.style.justifyContent = "center";
+  appRoot.style.background = "#0f172a";
+  appRoot.style.padding = "24px";
+  appRoot.style.boxSizing = "border-box";
+
+  const panel = document.createElement("div");
+  panel.style.maxWidth = "720px";
+  panel.style.width = "100%";
+  panel.style.background = "#111827";
+  panel.style.color = "#f8fafc";
+  panel.style.borderRadius = "16px";
+  panel.style.padding = "24px";
+  panel.style.boxShadow = "0 20px 60px rgba(0,0,0,0.35)";
+  panel.style.fontFamily = "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+
+  const title = document.createElement("h1");
+  title.textContent = "OV Planner failed to start";
+  title.style.margin = "0 0 12px";
+  title.style.fontSize = "22px";
+
+  const hint = document.createElement("p");
+  hint.textContent = "Try a hard refresh (Ctrl+Shift+R). If it keeps happening, share the details below.";
+  hint.style.margin = "0 0 16px";
+  hint.style.opacity = "0.85";
+
+  const buildInfo = document.createElement("p");
+  buildInfo.textContent = `Build: ${BUILD_ID}`;
+  buildInfo.style.margin = "0 0 16px";
+  buildInfo.style.fontWeight = "600";
+
+  const details = document.createElement("pre");
+  details.textContent = `${message}${stack ? `\n\n${stack}` : ""}`;
+  details.style.margin = "0";
+  details.style.padding = "16px";
+  details.style.background = "#0b1220";
+  details.style.borderRadius = "12px";
+  details.style.overflowX = "auto";
+  details.style.whiteSpace = "pre-wrap";
+  details.style.wordBreak = "break-word";
+
+  panel.append(title, hint, buildInfo, details);
+  appRoot.appendChild(panel);
+  console.error("OV Planner bootstrap failed", error);
 }
 
 function showErrorScreen(error, context = "Unexpected error") {
@@ -4214,10 +4285,6 @@ function setupEvents() {
 }
 
 async function init() {
-  const appRoot = document.getElementById("appRoot");
-  if (!appRoot) {
-    console.warn("Missing #appRoot - UI not rendered yet");
-  }
   setupGlobalErrorHandling();
   await initDB();
   await loadState();
@@ -4243,6 +4310,22 @@ async function init() {
   await handleSession(data?.session || null);
 }
 
-init().catch((error) => {
-  showErrorScreen(error, "Initialization error");
-});
+async function boot() {
+  try {
+    ensureAppRoot();
+    loadElements();
+    console.info("OV Planner booting…", { buildId: BUILD_ID, origin: window.location.origin });
+    validateSupabaseConfig();
+    await init();
+  } catch (error) {
+    renderBootstrapError(error);
+  }
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => {
+    boot();
+  });
+} else {
+  boot();
+}

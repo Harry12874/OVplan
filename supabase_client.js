@@ -14,6 +14,15 @@ const supabaseInitError = supabaseAvailable
       "Supabase client unavailable. Ensure @supabase/supabase-js loads and SUPABASE_URL/SUPABASE_ANON_KEY are set."
     );
 
+function validateSupabaseConfig() {
+  const missing = [];
+  if (!SUPABASE_URL) missing.push("SUPABASE_URL");
+  if (!SUPABASE_ANON_KEY) missing.push("SUPABASE_ANON_KEY");
+  if (missing.length) {
+    throw new Error(`Missing Supabase configuration: ${missing.join(", ")}`);
+  }
+}
+
 function createSupabaseStub(error) {
   const stubError = error || new Error("Supabase client unavailable.");
   const withError = async (data = null) => ({ data, error: stubError });
@@ -53,4 +62,12 @@ function signOut() {
   return supabase.auth.signOut();
 }
 
-export { supabase, getSession, signIn, signOut, supabaseAvailable, supabaseInitError };
+export {
+  supabase,
+  getSession,
+  signIn,
+  signOut,
+  supabaseAvailable,
+  supabaseInitError,
+  validateSupabaseConfig,
+};
