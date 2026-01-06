@@ -1318,6 +1318,10 @@ label {
   margin-bottom: 16px;
 }
 
+.sticky-notes-auth {
+  margin-bottom: 16px;
+}
+
 .sticky-notes-sections {
   display: grid;
   gap: 16px;

@@ -402,17 +402,24 @@
                 <button id="newStickyNoteBtn" class="btn btn-primary" data-requires-online="true">+ New Note</button>
               </div>
             </div>
-            <div class="sticky-notes-filters">
-              <input id="stickyNotesSearch" type="search" placeholder="Search notes" class="search" />
-              <select id="stickyNotesCustomerFilter"></select>
-              <select id="stickyNotesSort">
-                <option value="updated_desc">Last updated (newest)</option>
-                <option value="updated_asc">Last updated (oldest)</option>
-                <option value="priority_desc">Priority (high → low)</option>
-                <option value="priority_asc">Priority (low → high)</option>
-              </select>
+            <div id="stickyNotesAuth" class="card sticky-notes-auth hidden">
+              <h3>Sign in to use sticky notes</h3>
+              <p class="muted">Sticky notes are private to your account.</p>
+              <button id="stickyNotesSignIn" class="btn btn-primary">Sign in</button>
             </div>
-            <div id="stickyNotesSections" class="sticky-notes-sections"></div>
+            <div id="stickyNotesContent">
+              <div class="sticky-notes-filters">
+                <input id="stickyNotesSearch" type="search" placeholder="Search notes" class="search" />
+                <select id="stickyNotesCustomerFilter"></select>
+                <select id="stickyNotesSort">
+                  <option value="updated_desc">Last updated (newest)</option>
+                  <option value="updated_asc">Last updated (oldest)</option>
+                  <option value="priority_desc">Priority (high → low)</option>
+                  <option value="priority_asc">Priority (low → high)</option>
+                </select>
+              </div>
+              <div id="stickyNotesSections" class="sticky-notes-sections"></div>
+            </div>
           </section>
 
           <section id="account" class="tab-panel" aria-labelledby="Account">

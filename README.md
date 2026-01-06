@@ -15,6 +15,7 @@ Then visit `http://localhost:8000`.
 
 ## Data storage
 All data is stored locally in your browser (IndexedDB with localStorage fallback). Clearing browser data will remove records.
+Sticky notes are scoped per user via Supabase RLS; `user_id` defaults to `auth.uid()` on insert.
 
 ## Backup & restore
 Use the **Backup & Restore** tab to download a JSON backup and restore it later. Consider running a backup weekly.
