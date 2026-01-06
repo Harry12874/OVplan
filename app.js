@@ -51,6 +51,7 @@ const state = {
   tasks: [],
   scheduleEvents: [],
   oneOffItems: [],
+  stickyNotes: [],
   settings: {},
   session: null,
   selectedScheduleItems: new Set(),
@@ -159,6 +160,11 @@ function loadElements() {
     restoreInput: document.getElementById("restoreInput"),
     restoreBtn: document.getElementById("restoreBtn"),
     backupStatus: document.getElementById("backupStatus"),
+    newStickyNoteBtn: document.getElementById("newStickyNoteBtn"),
+    stickyNotesSearch: document.getElementById("stickyNotesSearch"),
+    stickyNotesCustomerFilter: document.getElementById("stickyNotesCustomerFilter"),
+    stickyNotesSort: document.getElementById("stickyNotesSort"),
+    stickyNotesSections: document.getElementById("stickyNotesSections"),
     newOrderBtn: document.getElementById("newOrderBtn"),
     newCustomerBtn: document.getElementById("newCustomerBtn"),
     newRepBtn: document.getElementById("newRepBtn"),
@@ -184,6 +190,20 @@ const statusLabels = {
   packed: "Packed",
   delivered: "Delivered",
   cancelled: "Cancelled",
+};
+
+const stickyNotePriorities = [
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "urgent", label: "Urgent" },
+];
+
+const stickyPriorityOrder = {
+  urgent: 4,
+  high: 3,
+  medium: 2,
+  low: 1,
 };
 
 function on(sel, evt, handler) {
@@ -602,6 +622,7 @@ async function loadState({ useLocalCustomers = true, useLocalScheduleEvents = tr
   state.tasks = await getAll("tasks");
   state.scheduleEvents = useLocalScheduleEvents ? await getAll("schedule_events") : [];
   state.oneOffItems = await getAll("one_off_items");
+  state.stickyNotes = await getAll("sticky_notes");
   const settings = await getAll("settings");
   state.settings = ensureSettingsDefaults(
     settings.reduce((acc, item) => {
@@ -735,6 +756,26 @@ function repName(repId) {
 
 function customerById(id) {
   return state.customers.find((customer) => customer.id === id);
+}
+
+function stickyNoteCustomerLabel(customer) {
+  if (!customer) return "";
+  const idLabel = customer.customerId || customer.id;
+  return `${customer.storeName || "Unnamed"} (${idLabel})`;
+}
+
+function stickyNoteDisplayName(note) {
+  const customer = customerById(note.customer_id);
+  return customer?.storeName || note.customer_name || "Unknown customer";
+}
+
+function stickyNoteDisplayId(note) {
+  const customer = customerById(note.customer_id);
+  return customer?.customerId || note.customer_id || "—";
+}
+
+function stickyPriorityLabel(priority) {
+  return stickyNotePriorities.find((item) => item.value === priority)?.label || "Low";
 }
 
 function orderById(id) {
@@ -1388,6 +1429,19 @@ function mapScheduleEventFromSupabase(row) {
   };
 }
 
+function mapStickyNoteToSupabase(note) {
+  return {
+    id: note.id,
+    customer_id: note.customer_id,
+    customer_name: note.customer_name,
+    text: note.text,
+    priority: note.priority,
+    status: note.status,
+    created_at: note.created_at,
+    updated_at: note.updated_at,
+  };
+}
+
 async function syncUpsertBatch(table, records, mapper, { onProgress } = {}) {
   const batchSize = 200;
   let processed = 0;
@@ -1418,15 +1472,29 @@ async function loadFromSupabase() {
       .from("schedule_events")
       .select("id,data_json");
     if (eventsError) throw eventsError;
+    const { data: notesData, error: notesError } = await supabase
+      .from("sticky_notes")
+      .select("*");
+    if (notesError) throw notesError;
     const customers = (customersData || []).map((row) => {
       const customer = mapCustomerFromSupabase(row);
       return customer.id ? customer : { ...customer, id: createCustomerId() };
     });
     const events = (eventsData || []).map(mapScheduleEventFromSupabase);
+    const stickyNotes = (notesData || []).map((note) => ({
+      ...note,
+      id: note.id || uuid(),
+      status: note.status || "open",
+      priority: note.priority || "low",
+      text: note.text || "",
+      customer_name: note.customer_name || "",
+    }));
     await clearStore("customers");
     await clearStore("schedule_events");
+    await clearStore("sticky_notes");
     await bulkPut("customers", customers);
     await bulkPut("schedule_events", events);
+    await bulkPut("sticky_notes", stickyNotes);
     updateConnectionStatus({
       online: true,
       canWrite: true,
@@ -1474,6 +1542,7 @@ async function syncPushAll() {
   if (!state.session) return;
   await syncUpsertBatch("customers", state.customers, mapCustomerToSupabase);
   await syncUpsertBatch("schedule_events", state.scheduleEvents, mapScheduleEventToSupabase);
+  await syncUpsertBatch("sticky_notes", state.stickyNotes, mapStickyNoteToSupabase);
   setCloudStatus("synced", toISO());
 }
 
@@ -3705,6 +3774,316 @@ function renderBackupStatus() {
   elements.backupStatus.textContent = `Last backup: ${formatDateTime(state.settings.app.lastBackupAt)}`;
 }
 
+function listStickyNotes({ status, customerId, query, sort } = {}) {
+  let notes = [...state.stickyNotes];
+  if (status) {
+    notes = notes.filter((note) => note.status === status);
+  }
+  if (customerId && customerId !== "all") {
+    notes = notes.filter((note) => note.customer_id === customerId);
+  }
+  if (query) {
+    notes = notes.filter((note) => {
+      const textMatch = matchesSearch(note.text || "", query);
+      const customerMatch = matchesSearch(note.customer_name || "", query);
+      const displayMatch = matchesSearch(stickyNoteDisplayName(note), query);
+      return textMatch || customerMatch || displayMatch;
+    });
+  }
+  return sortStickyNotes(notes, sort);
+}
+
+function stickyNoteUpdatedAt(note) {
+  return new Date(note.updated_at || note.created_at || 0).getTime();
+}
+
+function sortStickyNotes(notes, sort = "updated_desc") {
+  const byUpdated = (a, b) => stickyNoteUpdatedAt(a) - stickyNoteUpdatedAt(b);
+  const byPriority = (a, b) => (stickyPriorityOrder[a.priority] || 0) - (stickyPriorityOrder[b.priority] || 0);
+  if (sort === "updated_asc") {
+    return notes.sort(byUpdated);
+  }
+  if (sort === "priority_desc") {
+    return notes.sort((a, b) => byPriority(b, a) || byUpdated(b, a));
+  }
+  if (sort === "priority_asc") {
+    return notes.sort((a, b) => byPriority(a, b) || byUpdated(b, a));
+  }
+  return notes.sort((a, b) => byUpdated(b, a));
+}
+
+function renderStickyNotesFilters() {
+  if (!elements.stickyNotesCustomerFilter) return;
+  const current = elements.stickyNotesCustomerFilter.value || "all";
+  const options = [
+    '<option value="all">All customers</option>',
+    ...state.customers
+      .slice()
+      .sort((a, b) => (a.storeName || "").localeCompare(b.storeName || ""))
+      .map((customer) => `<option value="${customer.id}">${customer.storeName}</option>`),
+  ];
+  elements.stickyNotesCustomerFilter.innerHTML = options.join("");
+  elements.stickyNotesCustomerFilter.value = current;
+  if (!elements.stickyNotesCustomerFilter.value) {
+    elements.stickyNotesCustomerFilter.value = "all";
+  }
+}
+
+function stickyNoteCard(note) {
+  const createdLabel = note.created_at ? formatDateTime(note.created_at) : "—";
+  const updatedLabel = note.updated_at ? formatDateTime(note.updated_at) : createdLabel;
+  const priorityLabel = stickyPriorityLabel(note.priority);
+  const statusAction = note.status === "done" ? "Undo Done" : "Mark Done";
+  return `
+    <article class="sticky-note-card priority-${note.priority}">
+      <header class="sticky-note-header">
+        <div>
+          <div class="sticky-note-customer">${stickyNoteDisplayName(note)}</div>
+          <div class="sticky-note-meta">Customer ID: ${stickyNoteDisplayId(note)}</div>
+        </div>
+        <span class="priority-badge priority-${note.priority}">${priorityLabel}</span>
+      </header>
+      <p class="sticky-note-text">${note.text}</p>
+      <div class="sticky-note-dates">
+        <div>Created: ${createdLabel}</div>
+        <div>Updated: ${updatedLabel}</div>
+      </div>
+      <div class="sticky-note-actions">
+        <button class="btn btn-secondary btn-small" data-action="edit" data-note-id="${note.id}">Edit</button>
+        <button class="btn btn-secondary btn-small" data-action="toggle-status" data-note-id="${note.id}">
+          ${statusAction}
+        </button>
+        <button class="btn btn-secondary btn-small danger" data-action="delete" data-note-id="${note.id}">
+          Delete
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function stickyNotesSection(title, notes, { open = false } = {}) {
+  const content = notes.length
+    ? `<div class="sticky-notes-grid">${notes.map(stickyNoteCard).join("")}</div>`
+    : `<p class="muted">No notes yet.</p>`;
+  return `
+    <details class="sticky-notes-section" ${open ? "open" : ""}>
+      <summary>
+        <span>${title}</span>
+        <span class="sticky-notes-count">${notes.length}</span>
+      </summary>
+      <div class="sticky-notes-body">
+        ${content}
+      </div>
+    </details>
+  `;
+}
+
+function renderStickyNotes() {
+  if (!elements.stickyNotesSections) return;
+  renderStickyNotesFilters();
+  const query = elements.stickyNotesSearch?.value.trim() || "";
+  const customerId = elements.stickyNotesCustomerFilter?.value || "all";
+  const sort = elements.stickyNotesSort?.value || "updated_desc";
+  const urgentNotes = listStickyNotes({ status: "open", customerId, query, sort }).filter(
+    (note) => note.priority === "urgent"
+  );
+  const openNotes = listStickyNotes({ status: "open", customerId, query, sort }).filter(
+    (note) => note.priority !== "urgent"
+  );
+  const doneNotes = listStickyNotes({ status: "done", customerId, query, sort });
+  const sections = [];
+  if (urgentNotes.length) {
+    sections.push(stickyNotesSection("Urgent", urgentNotes, { open: true }));
+  }
+  sections.push(stickyNotesSection("Open", openNotes, { open: true }));
+  sections.push(stickyNotesSection("Done", doneNotes, { open: false }));
+  elements.stickyNotesSections.innerHTML = sections.join("");
+}
+
+async function createStickyNote(payload) {
+  if (!canWrite()) {
+    showOfflineAlert();
+    return;
+  }
+  const now = toISO();
+  const note = {
+    id: uuid(),
+    customer_id: payload.customer_id,
+    customer_name: payload.customer_name,
+    text: payload.text,
+    priority: payload.priority,
+    status: "open",
+    created_at: now,
+    updated_at: now,
+  };
+  state.stickyNotes.unshift(note);
+  await put("sticky_notes", note);
+  renderStickyNotes();
+  showSnackbar("Sticky note created.");
+  try {
+    setCloudStatus("syncing");
+    const { error } = await supabase.from("sticky_notes").upsert(mapStickyNoteToSupabase(note), {
+      onConflict: "id",
+    });
+    if (error) throw error;
+    setCloudStatus("synced", toISO());
+  } catch (error) {
+    console.error("Supabase upsert failed", error);
+    handleSupabaseError(error, { context: "Supabase upsert failed", alertOnOffline: true });
+    state.stickyNotes = state.stickyNotes.filter((item) => item.id !== note.id);
+    await deleteItem("sticky_notes", note.id);
+    renderStickyNotes();
+    showSnackbar("Failed to save note.");
+  }
+}
+
+async function updateStickyNote(noteId, patch) {
+  if (!canWrite()) {
+    showOfflineAlert();
+    return;
+  }
+  const existing = state.stickyNotes.find((note) => note.id === noteId);
+  if (!existing) return;
+  const updated = {
+    ...existing,
+    ...patch,
+    updated_at: toISO(),
+  };
+  state.stickyNotes = state.stickyNotes.map((note) => (note.id === noteId ? updated : note));
+  await put("sticky_notes", updated);
+  renderStickyNotes();
+  showSnackbar("Sticky note updated.");
+  try {
+    setCloudStatus("syncing");
+    const { error } = await supabase.from("sticky_notes").upsert(mapStickyNoteToSupabase(updated), {
+      onConflict: "id",
+    });
+    if (error) throw error;
+    setCloudStatus("synced", toISO());
+  } catch (error) {
+    console.error("Supabase upsert failed", error);
+    handleSupabaseError(error, { context: "Supabase upsert failed", alertOnOffline: true });
+    state.stickyNotes = state.stickyNotes.map((note) => (note.id === noteId ? existing : note));
+    await put("sticky_notes", existing);
+    renderStickyNotes();
+    showSnackbar("Failed to update note.");
+  }
+}
+
+async function deleteStickyNote(noteId) {
+  if (!canWrite()) {
+    showOfflineAlert();
+    return;
+  }
+  const existing = state.stickyNotes.find((note) => note.id === noteId);
+  if (!existing) return;
+  state.stickyNotes = state.stickyNotes.filter((note) => note.id !== noteId);
+  await deleteItem("sticky_notes", noteId);
+  renderStickyNotes();
+  showSnackbar("Sticky note deleted.");
+  try {
+    setCloudStatus("syncing");
+    const { error } = await supabase.from("sticky_notes").delete().eq("id", noteId);
+    if (error) throw error;
+    setCloudStatus("synced", toISO());
+  } catch (error) {
+    console.error("Supabase delete failed", error);
+    handleSupabaseError(error, { context: "Supabase delete failed", alertOnOffline: true });
+    state.stickyNotes.unshift(existing);
+    await put("sticky_notes", existing);
+    renderStickyNotes();
+    showSnackbar("Failed to delete note.");
+  }
+}
+
+function openStickyNoteModal(note = null) {
+  const isEdit = Boolean(note);
+  const customerOptions = state.customers
+    .slice()
+    .sort((a, b) => (a.storeName || "").localeCompare(b.storeName || ""))
+    .map((customer) => `<option value="${stickyNoteCustomerLabel(customer)}"></option>`)
+    .join("");
+  const customerFromState = note?.customer_id ? customerById(note.customer_id) : null;
+  const customerLabel = note
+    ? customerFromState
+      ? stickyNoteCustomerLabel(customerFromState)
+      : note.customer_name || ""
+    : "";
+  const priorityOptions = stickyNotePriorities
+    .map(
+      (option) =>
+        `<option value="${option.value}" ${option.value === (note?.priority || "medium") ? "selected" : ""}>${option.label}</option>`
+    )
+    .join("");
+  showModal(`
+    <h2>${isEdit ? "Edit sticky note" : "New sticky note"}</h2>
+    <form id="stickyNoteForm" class="form">
+      <label>Customer (required)
+        <input id="stickyNoteCustomerInput" name="customer" list="stickyNoteCustomerList" value="${customerLabel || ""}" required />
+        <datalist id="stickyNoteCustomerList">
+          ${customerOptions}
+        </datalist>
+      </label>
+      <label>Priority (required)
+        <select name="priority" required>
+          ${priorityOptions}
+        </select>
+      </label>
+      <label>Task / problem (required)
+        <textarea name="text" rows="4" required>${note?.text || ""}</textarea>
+      </label>
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" id="stickyNoteCancel">Cancel</button>
+        <button type="submit" class="btn btn-primary">${isEdit ? "Save changes" : "Save note"}</button>
+      </div>
+    </form>
+  `);
+  disableFormIfOffline("stickyNoteForm");
+  const form = document.getElementById("stickyNoteForm");
+  const customerInput = document.getElementById("stickyNoteCustomerInput");
+  const cancelBtn = document.getElementById("stickyNoteCancel");
+  const customerLookup = new Map(state.customers.map((customer) => [stickyNoteCustomerLabel(customer), customer]));
+  if (cancelBtn) {
+    cancelBtn.addEventListener("click", closeModal);
+  }
+  if (form) {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const formData = new FormData(form);
+      const customerValue = customerInput.value.trim();
+      const selectedCustomer =
+        customerLookup.get(customerValue) ||
+        state.customers.find(
+          (customer) =>
+            customer.id === customerValue ||
+            customer.customerId === customerValue ||
+            customer.storeName === customerValue
+        );
+      if (!selectedCustomer) {
+        alert("Select a customer from the list.");
+        return;
+      }
+      const text = String(formData.get("text") || "").trim();
+      if (!text) {
+        alert("Task text is required.");
+        return;
+      }
+      const payload = {
+        customer_id: selectedCustomer.id,
+        customer_name: selectedCustomer.storeName || "Unnamed",
+        text,
+        priority: String(formData.get("priority") || "medium"),
+      };
+      if (isEdit && note) {
+        await updateStickyNote(note.id, payload);
+      } else {
+        await createStickyNote(payload);
+      }
+      closeModal();
+    });
+  }
+}
+
 function openHelpModal() {
   showModal(`
     <h2>User guide</h2>
@@ -3729,6 +4108,7 @@ async function handleBackup() {
     tasks: state.tasks,
     scheduleEvents: state.scheduleEvents,
     oneOffItems: state.oneOffItems,
+    stickyNotes: state.stickyNotes,
     settings: state.settings,
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -3757,7 +4137,16 @@ async function handleRestore() {
     ...customer,
     id: customer.id || createCustomerId(),
   }));
-  for (const store of ["reps", "customers", "orders", "tasks", "schedule_events", "one_off_items", "settings"]) {
+  for (const store of [
+    "reps",
+    "customers",
+    "orders",
+    "tasks",
+    "schedule_events",
+    "one_off_items",
+    "sticky_notes",
+    "settings",
+  ]) {
     await clearStore(store);
   }
   await bulkPut("reps", data.reps || []);
@@ -3766,12 +4155,14 @@ async function handleRestore() {
   await bulkPut("tasks", data.tasks || []);
   await bulkPut("schedule_events", data.scheduleEvents || []);
   await bulkPut("one_off_items", data.oneOffItems || []);
+  await bulkPut("sticky_notes", data.stickyNotes || []);
   if (data.settings?.app) {
     await put("settings", data.settings.app);
   }
   await loadState();
   const customers = importedCustomers;
   const events = data.scheduleEvents || [];
+  const stickyNotes = data.stickyNotes || [];
   elements.backupStatus.textContent = `Restoring ${customers.length} customers…`;
   try {
     await syncUpsertBatch("customers", customers, mapCustomerToSupabase, {
@@ -3782,6 +4173,11 @@ async function handleRestore() {
     await syncUpsertBatch("schedule_events", events, mapScheduleEventToSupabase, {
       onProgress: (done, total) => {
         elements.backupStatus.textContent = `Syncing schedule events ${done}/${total}…`;
+      },
+    });
+    await syncUpsertBatch("sticky_notes", stickyNotes, mapStickyNoteToSupabase, {
+      onProgress: (done, total) => {
+        elements.backupStatus.textContent = `Syncing sticky notes ${done}/${total}…`;
       },
     });
     updateConnectionStatus({ status: "Online/Synced", canWrite: true });
@@ -3984,6 +4380,7 @@ function renderAll() {
   renderExpected();
   renderSchedule();
   renderBackupStatus();
+  renderStickyNotes();
 }
 
 function clearAppState() {
@@ -3993,6 +4390,7 @@ function clearAppState() {
   state.tasks = [];
   state.scheduleEvents = [];
   state.oneOffItems = [];
+  state.stickyNotes = [];
 }
 
 async function handleSession(session) {
@@ -4089,6 +4487,33 @@ function setupEvents() {
   on(elements.customersFrequencyFilter, "change", renderCustomers);
   on(elements.customersChannelFilter, "change", renderCustomers);
   on(elements.customersScheduleFilter, "change", renderCustomers);
+  on(elements.newStickyNoteBtn, "click", () => openStickyNoteModal());
+  on(elements.stickyNotesSearch, "input", renderStickyNotes);
+  on(elements.stickyNotesCustomerFilter, "change", renderStickyNotes);
+  on(elements.stickyNotesSort, "change", renderStickyNotes);
+  if (elements.stickyNotesSections) {
+    elements.stickyNotesSections.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-action][data-note-id]");
+      if (!button) return;
+      const noteId = button.dataset.noteId;
+      const note = state.stickyNotes.find((item) => item.id === noteId);
+      if (!note) return;
+      const action = button.dataset.action;
+      if (action === "edit") {
+        openStickyNoteModal(note);
+        return;
+      }
+      if (action === "toggle-status") {
+        const nextStatus = note.status === "done" ? "open" : "done";
+        updateStickyNote(noteId, { status: nextStatus });
+        return;
+      }
+      if (action === "delete") {
+        if (!confirm("Delete this note? This cannot be undone.")) return;
+        deleteStickyNote(noteId);
+      }
+    });
+  }
   on(elements.addOneOffTodayBtn, "click", openOneOffModal);
   on(elements.addOneOffScheduleBtn, "click", openOneOffModal);
   on(elements.newOrderBtn, "click", () => openOrderModal());

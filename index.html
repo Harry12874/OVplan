@@ -392,6 +392,29 @@
             </div>
           </section>
 
+          <section id="sticky-notes" class="tab-panel" aria-labelledby="Sticky Notes">
+            <div class="panel-header">
+              <div>
+                <h2 class="page-title">Sticky Notes</h2>
+                <p class="muted">Track follow-ups tied to specific customers.</p>
+              </div>
+              <div class="actions">
+                <button id="newStickyNoteBtn" class="btn btn-primary" data-requires-online="true">+ New Note</button>
+              </div>
+            </div>
+            <div class="sticky-notes-filters">
+              <input id="stickyNotesSearch" type="search" placeholder="Search notes" class="search" />
+              <select id="stickyNotesCustomerFilter"></select>
+              <select id="stickyNotesSort">
+                <option value="updated_desc">Last updated (newest)</option>
+                <option value="updated_asc">Last updated (oldest)</option>
+                <option value="priority_desc">Priority (high → low)</option>
+                <option value="priority_asc">Priority (low → high)</option>
+              </select>
+            </div>
+            <div id="stickyNotesSections" class="sticky-notes-sections"></div>
+          </section>
+
           <section id="account" class="tab-panel" aria-labelledby="Account">
             <div class="panel-header">
               <div>
@@ -414,6 +437,7 @@
                 <button class="btn btn-secondary tab" data-tab="expected">Expected Orders</button>
                 <button class="btn btn-secondary tab" data-tab="import">Import Customers</button>
                 <button class="btn btn-secondary tab" data-tab="export">Export Deliveries</button>
+                <button class="btn btn-secondary tab" data-tab="sticky-notes">Sticky Notes</button>
                 <button class="btn btn-secondary tab" data-tab="backup">Backup & Restore</button>
               </div>
             </div>
