@@ -52,8 +52,11 @@ const state = {
   scheduleEvents: [],
   oneOffItems: [],
   stickyNotes: [],
+  customerPhotos: {},
+  customerPhotoUrlCache: {},
   settings: {},
   session: null,
+  profileRole: null,
   selectedScheduleItems: new Set(),
   visibleScheduleItems: [],
   connection: {
@@ -3285,6 +3288,375 @@ function openRepModal(rep = {}) {
   });
 }
 
+async function loadProfileRole() {
+  if (!state.session || !supabaseAvailable) {
+    state.profileRole = null;
+    return;
+  }
+  try {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", state.session.user?.id)
+      .single();
+    if (error) {
+      console.warn("Unable to load profile role.", error.message || error);
+      return;
+    }
+    state.profileRole = data?.role || null;
+  } catch (error) {
+    console.warn("Unable to load profile role.", error?.message || error);
+  }
+}
+
+function canEditCustomerPhotos() {
+  if (!state.session || !supabaseAvailable) return false;
+  if (state.profileRole && state.profileRole.toLowerCase() === "driver") return false;
+  return canWrite();
+}
+
+function customerPhotoStatusMessage(customerId) {
+  if (!customerId) return "Save the customer to add photos.";
+  if (!supabaseAvailable) return "Photo storage is unavailable in local-only mode.";
+  if (!state.session) return "Sign in to view customer photos.";
+  return "Add reference photos and store location notes for delivery drivers.";
+}
+
+async function getCustomerPhotos(customerId) {
+  if (!customerId || !supabaseAvailable || !state.session) return [];
+  const { data, error } = await supabase
+    .from("customer_photos")
+    .select("*")
+    .eq("customer_id", customerId)
+    .order("created_at", { ascending: false });
+  if (error) {
+    console.error("Failed to load customer photos.", error);
+    showSnackbar("Unable to load customer photos.");
+    return [];
+  }
+  return data || [];
+}
+
+async function refreshCustomerPhotoUrls(customerId) {
+  const photos = state.customerPhotos[customerId] || [];
+  if (!photos.length || !supabaseAvailable) return;
+  const urlEntries = await Promise.all(
+    photos.map(async (photo) => {
+      const { data, error } = await supabase.storage
+        .from("customer-photos")
+        .createSignedUrl(photo.image_path, 60 * 60 * 24);
+      if (error) {
+        console.warn("Failed to create signed URL.", error.message || error);
+        return null;
+      }
+      return [photo.image_path, data?.signedUrl || ""];
+    })
+  );
+  urlEntries.forEach((entry) => {
+    if (!entry) return;
+    const [path, url] = entry;
+    state.customerPhotoUrlCache[path] = url;
+  });
+}
+
+function getCustomerPhotoUrl(photo) {
+  return state.customerPhotoUrlCache[photo.image_path] || "";
+}
+
+async function addCustomerPhoto(customerId, file, caption, storeLocation) {
+  if (!supabaseAvailable || !state.session) {
+    throw new Error("Supabase is unavailable.");
+  }
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+  const path = `${customerId}/${uuid()}.${ext}`;
+  const { error: uploadError } = await supabase.storage
+    .from("customer-photos")
+    .upload(path, file, { contentType: file.type || undefined });
+  if (uploadError) throw uploadError;
+  const { error: insertError } = await supabase.from("customer_photos").insert({
+    customer_id: customerId,
+    image_path: path,
+    caption,
+    store_location: storeLocation,
+    created_by: state.session.user?.id || null,
+  });
+  if (insertError) {
+    await supabase.storage.from("customer-photos").remove([path]);
+    throw insertError;
+  }
+}
+
+async function updateCustomerPhoto(photoId, fields) {
+  if (!supabaseAvailable || !state.session) {
+    throw new Error("Supabase is unavailable.");
+  }
+  const { error } = await supabase.from("customer_photos").update(fields).eq("id", photoId);
+  if (error) throw error;
+}
+
+async function deleteCustomerPhoto(photoId) {
+  if (!supabaseAvailable || !state.session) {
+    throw new Error("Supabase is unavailable.");
+  }
+  const { data, error } = await supabase
+    .from("customer_photos")
+    .select("id, image_path")
+    .eq("id", photoId)
+    .single();
+  if (error) throw error;
+  if (data?.image_path) {
+    await supabase.storage.from("customer-photos").remove([data.image_path]);
+  }
+  const { error: deleteError } = await supabase.from("customer_photos").delete().eq("id", photoId);
+  if (deleteError) throw deleteError;
+}
+
+function ensurePhotoLightbox() {
+  let lightbox = document.getElementById("photoLightbox");
+  if (lightbox) return lightbox;
+  lightbox = document.createElement("div");
+  lightbox.id = "photoLightbox";
+  lightbox.className = "photo-lightbox hidden";
+  lightbox.innerHTML = `
+    <div class="photo-lightbox-content">
+      <button class="modal-close" type="button" data-action="close-photo-lightbox">×</button>
+      <img id="photoLightboxImage" alt="Customer photo" />
+      <div class="photo-lightbox-details">
+        <h3 id="photoLightboxCaption"></h3>
+        <p class="muted" id="photoLightboxLocation"></p>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(lightbox);
+  lightbox.addEventListener("click", (event) => {
+    if (event.target === lightbox || event.target.dataset.action === "close-photo-lightbox") {
+      lightbox.classList.add("hidden");
+    }
+  });
+  return lightbox;
+}
+
+function showPhotoLightbox(photo) {
+  const lightbox = ensurePhotoLightbox();
+  const image = lightbox.querySelector("#photoLightboxImage");
+  const caption = lightbox.querySelector("#photoLightboxCaption");
+  const location = lightbox.querySelector("#photoLightboxLocation");
+  const url = getCustomerPhotoUrl(photo);
+  image.src = url || "";
+  caption.textContent = photo.caption || "Untitled";
+  location.textContent = photo.store_location || "No store location provided.";
+  lightbox.classList.remove("hidden");
+}
+
+function renderCustomerPhotos(customerId, canEdit) {
+  const grid = document.getElementById("customerPhotosGrid");
+  const emptyState = document.getElementById("customerPhotosEmpty");
+  if (!grid || !emptyState) return;
+  const photos = state.customerPhotos[customerId] || [];
+  if (!customerId) {
+    grid.innerHTML = "";
+    emptyState.textContent = customerPhotoStatusMessage(customerId);
+    return;
+  }
+  if (!state.session || !supabaseAvailable) {
+    grid.innerHTML = "";
+    emptyState.textContent = customerPhotoStatusMessage(customerId);
+    return;
+  }
+  if (!photos.length) {
+    grid.innerHTML = "";
+    emptyState.textContent = "No photos yet.";
+    return;
+  }
+  emptyState.textContent = "";
+  grid.innerHTML = photos
+    .map((photo) => {
+      const url = getCustomerPhotoUrl(photo);
+      return `
+        <article class="photo-card" data-photo-id="${photo.id}">
+          <button class="photo-thumb" type="button" data-action="view-photo" data-photo-id="${photo.id}">
+            ${url ? `<img src="${url}" alt="${photo.caption || "Customer photo"}" />` : `<span>Loading…</span>`}
+          </button>
+          <div class="photo-details">
+            <p class="photo-caption">${photo.caption || "Untitled"}</p>
+            <p class="muted">${photo.store_location || "No store location provided."}</p>
+          </div>
+          ${
+            canEdit
+              ? `<div class="photo-actions">
+                  <button class="ghost" type="button" data-action="edit-photo" data-photo-id="${photo.id}">Edit</button>
+                  <button class="ghost danger" type="button" data-action="delete-photo" data-photo-id="${photo.id}">Delete</button>
+                </div>`
+              : ""
+          }
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function setupCustomerPhotosSection(customer) {
+  const canEdit = canEditCustomerPhotos();
+  const status = document.getElementById("customerPhotosStatus");
+  const addButton = document.getElementById("customerPhotoAddBtn");
+  const form = document.getElementById("customerPhotoForm");
+  const formTitle = document.getElementById("customerPhotoFormTitle");
+  const fileField = document.getElementById("customerPhotoFile");
+  const captionField = document.getElementById("customerPhotoCaption");
+  const locationField = document.getElementById("customerPhotoLocation");
+  const submitButton = document.getElementById("customerPhotoSubmit");
+  const cancelButton = document.getElementById("customerPhotoCancel");
+  const formStatus = document.getElementById("customerPhotoFormStatus");
+  const grid = document.getElementById("customerPhotosGrid");
+  if (status) status.textContent = customerPhotoStatusMessage(customer.id);
+  renderCustomerPhotos(customer.id, canEdit);
+  if (!customer.id) {
+    return;
+  }
+
+  const setFormVisibility = (visible) => {
+    if (!form) return;
+    form.classList.toggle("hidden", !visible);
+  };
+
+  const setFormMode = (mode, photo = null) => {
+    if (!form) return;
+    form.dataset.mode = mode;
+    form.dataset.photoId = photo?.id || "";
+    formTitle.textContent = mode === "edit" ? "Edit photo details" : "Add a photo";
+    submitButton.textContent = mode === "edit" ? "Save changes" : "Upload photo";
+    captionField.value = photo?.caption || "";
+    locationField.value = photo?.store_location || "";
+    fileField.disabled = mode === "edit";
+    const fileWrap = fileField?.parentElement;
+    if (fileWrap) {
+      fileWrap.classList.toggle("hidden", mode === "edit");
+    }
+  };
+
+  const setFormBusy = (busy) => {
+    [fileField, captionField, locationField, submitButton, cancelButton].forEach((input) => {
+      if (input) input.disabled = busy;
+    });
+  };
+
+  if (addButton) {
+    addButton.addEventListener("click", () => {
+      setFormMode("add");
+      setFormVisibility(true);
+    });
+    addButton.disabled = !canEdit || !customer.id;
+  }
+  if (cancelButton) {
+    cancelButton.addEventListener("click", () => {
+      setFormVisibility(false);
+    });
+  }
+
+  if (grid) {
+    grid.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-action][data-photo-id]");
+      if (!button) return;
+      const photoId = button.dataset.photoId;
+      const photos = state.customerPhotos[customer.id] || [];
+      const photo = photos.find((item) => item.id === photoId);
+      if (!photo) return;
+      const action = button.dataset.action;
+      if (action === "view-photo") {
+        showPhotoLightbox(photo);
+      } else if (action === "edit-photo" && canEdit) {
+        setFormMode("edit", photo);
+        setFormVisibility(true);
+      } else if (action === "delete-photo" && canEdit) {
+        if (!confirm("Delete this photo? This cannot be undone.")) return;
+        (async () => {
+          try {
+            await deleteCustomerPhoto(photoId);
+            state.customerPhotos[customer.id] = await getCustomerPhotos(customer.id);
+            await refreshCustomerPhotoUrls(customer.id);
+            renderCustomerPhotos(customer.id, canEdit);
+            showSnackbar("Photo deleted.");
+          } catch (error) {
+            console.error(error);
+            showSnackbar("Unable to delete photo.");
+          }
+        })();
+      }
+    });
+  }
+
+  if (form) {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!canEdit) return;
+      formStatus.textContent = "";
+      const mode = form.dataset.mode || "add";
+      const photoId = form.dataset.photoId || "";
+      const caption = captionField.value.trim();
+      const storeLocation = locationField.value.trim();
+      if (mode === "add") {
+        const file = fileField.files?.[0];
+        if (!file) {
+          formStatus.textContent = "Choose a photo to upload.";
+          return;
+        }
+        const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
+        if (file.type && !allowedTypes.includes(file.type)) {
+          formStatus.textContent = "Unsupported file type. Use JPG, PNG, or WebP.";
+          return;
+        }
+        if (file.size > 10 * 1024 * 1024) {
+          formStatus.textContent = "File must be under 10MB.";
+          return;
+        }
+        setFormBusy(true);
+        formStatus.textContent = "Uploading photo…";
+        try {
+          await addCustomerPhoto(customer.id, file, caption, storeLocation);
+          state.customerPhotos[customer.id] = await getCustomerPhotos(customer.id);
+          await refreshCustomerPhotoUrls(customer.id);
+          renderCustomerPhotos(customer.id, canEdit);
+          showSnackbar("Photo uploaded.");
+          form.reset();
+          setFormVisibility(false);
+        } catch (error) {
+          console.error(error);
+          formStatus.textContent = "Upload failed. Please try again.";
+        } finally {
+          setFormBusy(false);
+        }
+        return;
+      }
+      if (!photoId) return;
+      setFormBusy(true);
+      formStatus.textContent = "Saving changes…";
+      try {
+        await updateCustomerPhoto(photoId, {
+          caption,
+          store_location: storeLocation,
+        });
+        state.customerPhotos[customer.id] = await getCustomerPhotos(customer.id);
+        await refreshCustomerPhotoUrls(customer.id);
+        renderCustomerPhotos(customer.id, canEdit);
+        showSnackbar("Photo updated.");
+        setFormVisibility(false);
+      } catch (error) {
+        console.error(error);
+        formStatus.textContent = "Unable to save changes.";
+      } finally {
+        setFormBusy(false);
+      }
+    });
+  }
+
+  (async () => {
+    if (!state.session || !supabaseAvailable) return;
+    state.customerPhotos[customer.id] = await getCustomerPhotos(customer.id);
+    await refreshCustomerPhotoUrls(customer.id);
+    renderCustomerPhotos(customer.id, canEdit);
+  })();
+}
+
 function renderCustomerActivity(customerId) {
   if (!customerId) {
     return "<p class=\"muted\">Save the customer to see activity here.</p>";
@@ -3324,6 +3696,7 @@ function renderCustomerActivity(customerId) {
 function openCustomerModal(customer = {}) {
   const orderChannel = customer.orderChannel || customer.channelPreference || "portal";
   const schedule = customer.schedule || defaultSchedule();
+  const canEditPhotos = canEditCustomerPhotos();
   showModal(`
     <h2>${customer.id ? "Edit customer" : "Add customer"}</h2>
     <form id="customerForm" class="form">
@@ -3478,6 +3851,32 @@ function openCustomerModal(customer = {}) {
         </div>
       </div>
       <div class="card">
+        <div class="card-header">
+          <h3>Photos & Store Location</h3>
+          ${canEditPhotos ? `<button class="secondary" type="button" id="customerPhotoAddBtn">Add Photo</button>` : ""}
+        </div>
+        <p class="muted" id="customerPhotosStatus"></p>
+        <form id="customerPhotoForm" class="form photo-form hidden">
+          <h4 id="customerPhotoFormTitle">Add a photo</h4>
+          <label id="customerPhotoFileWrap">Photo file
+            <input id="customerPhotoFile" name="photoFile" type="file" accept="image/jpeg,image/png,image/webp" />
+          </label>
+          <label>Caption
+            <input id="customerPhotoCaption" name="caption" placeholder="Front door display" />
+          </label>
+          <label>Store location
+            <input id="customerPhotoLocation" name="storeLocation" placeholder="Aisle 3, endcap near fridge" />
+          </label>
+          <div id="customerPhotoFormStatus" class="muted"></div>
+          <div class="form-actions">
+            <button class="secondary" type="button" id="customerPhotoCancel">Cancel</button>
+            <button class="primary" type="submit" id="customerPhotoSubmit">Upload photo</button>
+          </div>
+        </form>
+        <div id="customerPhotosGrid" class="photo-grid"></div>
+        <p id="customerPhotosEmpty" class="muted"></p>
+      </div>
+      <div class="card">
         <h3>Recent activity</h3>
         ${renderCustomerActivity(customer.id)}
       </div>
@@ -3526,6 +3925,7 @@ function openCustomerModal(customer = {}) {
   scheduleFrequencySelect.addEventListener("change", updateScheduleVisibility);
   secondRunToggle.addEventListener("change", updateScheduleVisibility);
   updateScheduleVisibility();
+  setupCustomerPhotosSection(customer);
 
   document.getElementById("customerForm").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -4540,12 +4940,16 @@ function clearAppState() {
   state.scheduleEvents = [];
   state.oneOffItems = [];
   state.stickyNotes = [];
+  state.customerPhotos = {};
+  state.customerPhotoUrlCache = {};
+  state.profileRole = null;
 }
 
 async function handleSession(session) {
   state.session = session;
   if (!session) {
     clearAppState();
+    state.profileRole = null;
     showLoginScreen();
     return;
   }
@@ -4556,6 +4960,7 @@ async function handleSession(session) {
     email: session.user?.email || "",
     status: navigator.onLine ? "Online/Synced" : "Offline/Local",
   });
+  await loadProfileRole();
   const loadResult = await loadFromSupabase();
   if (loadResult?.status === "error") {
     await loadState({
