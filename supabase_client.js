@@ -28,7 +28,11 @@ function createSupabaseStub(error) {
   const withError = async (data = null) => ({ data, error: stubError });
   const stubTable = {
     select: () => withError([]),
+    insert: () => withError(),
     upsert: () => withError(),
+    update: () => ({
+      eq: () => withError(),
+    }),
     delete: () => ({
       eq: () => withError(),
     }),
@@ -41,6 +45,13 @@ function createSupabaseStub(error) {
       signOut: () => withError(),
       onAuthStateChange: () => ({
         data: { subscription: { unsubscribe: () => {} } },
+      }),
+    },
+    storage: {
+      from: () => ({
+        upload: () => withError(),
+        remove: () => withError(),
+        createSignedUrl: () => withError({ signedUrl: "" }),
       }),
     },
   };
