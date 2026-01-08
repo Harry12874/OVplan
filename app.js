@@ -3367,20 +3367,26 @@ async function addCustomerPhoto(customerId, file, caption, storeLocation) {
   if (!supabaseAvailable || !state.session) {
     throw new Error("Supabase is unavailable.");
   }
+  if (!file) {
+    throw new Error("No file selected.");
+  }
   const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
-  const path = `${customerId}/${uuid()}.${ext}`;
+  const path = `${customerId}/${crypto.randomUUID()}.${ext}`;
   const { error: uploadError } = await supabase.storage
     .from("customer-photos")
-    .upload(path, file, { contentType: file.type || undefined });
-  if (uploadError) throw uploadError;
+    .upload(path, file, { contentType: file.type || undefined, upsert: false });
+  if (uploadError) {
+    console.error("Customer photo upload failed.", uploadError);
+    throw uploadError;
+  }
   const { error: insertError } = await supabase.from("customer_photos").insert({
     customer_id: customerId,
     image_path: path,
     caption,
     store_location: storeLocation,
-    created_by: state.session.user?.id || null,
   });
   if (insertError) {
+    console.error("Customer photo insert failed.", insertError);
     await supabase.storage.from("customer-photos").remove([path]);
     throw insertError;
   }
@@ -3538,17 +3544,28 @@ function setupCustomerPhotosSection(customer) {
     [fileField, captionField, locationField, submitButton, cancelButton].forEach((input) => {
       if (input) input.disabled = busy;
     });
+    if (submitButton) {
+      submitButton.textContent = busy
+        ? form?.dataset.mode === "edit"
+          ? "Saving…"
+          : "Uploading…"
+        : form?.dataset.mode === "edit"
+          ? "Save changes"
+          : "Upload photo";
+    }
   };
 
   if (addButton) {
-    addButton.addEventListener("click", () => {
+    addButton.addEventListener("click", (event) => {
+      event.stopPropagation();
       setFormMode("add");
       setFormVisibility(true);
     });
     addButton.disabled = !canEdit || !customer.id;
   }
   if (cancelButton) {
-    cancelButton.addEventListener("click", () => {
+    cancelButton.addEventListener("click", (event) => {
+      event.stopPropagation();
       setFormVisibility(false);
     });
   }
@@ -3586,8 +3603,12 @@ function setupCustomerPhotosSection(customer) {
   }
 
   if (form) {
+    form.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
+      event.stopPropagation();
       if (!canEdit) return;
       formStatus.textContent = "";
       const mode = form.dataset.mode || "add";
@@ -3621,7 +3642,9 @@ function setupCustomerPhotosSection(customer) {
           setFormVisibility(false);
         } catch (error) {
           console.error(error);
-          formStatus.textContent = "Upload failed. Please try again.";
+          const message = error?.message || "Upload failed. Please try again.";
+          formStatus.textContent = message;
+          showSnackbar(message);
         } finally {
           setFormBusy(false);
         }
@@ -3642,11 +3665,24 @@ function setupCustomerPhotosSection(customer) {
         setFormVisibility(false);
       } catch (error) {
         console.error(error);
-        formStatus.textContent = "Unable to save changes.";
+        const message = error?.message || "Unable to save changes.";
+        formStatus.textContent = message;
+        showSnackbar(message);
       } finally {
         setFormBusy(false);
       }
     });
+    if (submitButton) {
+      submitButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (form.requestSubmit) {
+          form.requestSubmit();
+        } else {
+          form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+        }
+      });
+    }
   }
 
   (async () => {
@@ -3870,7 +3906,7 @@ function openCustomerModal(customer = {}) {
           <div id="customerPhotoFormStatus" class="muted"></div>
           <div class="form-actions">
             <button class="secondary" type="button" id="customerPhotoCancel">Cancel</button>
-            <button class="primary" type="submit" id="customerPhotoSubmit">Upload photo</button>
+            <button class="primary" type="button" id="customerPhotoSubmit">Upload photo</button>
           </div>
         </form>
         <div id="customerPhotosGrid" class="photo-grid"></div>
