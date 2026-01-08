@@ -3514,6 +3514,7 @@ function setupCustomerPhotosSection(customer) {
   const cancelButton = document.getElementById("customerPhotoCancel");
   const formStatus = document.getElementById("customerPhotoFormStatus");
   const grid = document.getElementById("customerPhotosGrid");
+  let isUploading = false;
   if (status) status.textContent = customerPhotoStatusMessage(customer.id);
   renderCustomerPhotos(customer.id, canEdit);
   if (!customer.id) {
@@ -3541,6 +3542,7 @@ function setupCustomerPhotosSection(customer) {
   };
 
   const setFormBusy = (busy) => {
+    isUploading = busy;
     [fileField, captionField, locationField, submitButton, cancelButton].forEach((input) => {
       if (input) input.disabled = busy;
     });
@@ -3610,50 +3612,58 @@ function setupCustomerPhotosSection(customer) {
       event.preventDefault();
       event.stopPropagation();
       if (!canEdit) return;
+      if (isUploading) return;
       formStatus.textContent = "";
       const mode = form.dataset.mode || "add";
       const photoId = form.dataset.photoId || "";
       const caption = captionField.value.trim();
       const storeLocation = locationField.value.trim();
-      if (mode === "add") {
-        const file = fileField.files?.[0];
-        if (!file) {
-          formStatus.textContent = "Choose a photo to upload.";
+      setFormBusy(true);
+      try {
+        if (!customer.id) {
+          formStatus.textContent = "Missing customer id.";
+          showSnackbar("Missing customer id");
           return;
         }
-        const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
-        if (file.type && !allowedTypes.includes(file.type)) {
-          formStatus.textContent = "Unsupported file type. Use JPG, PNG, or WebP.";
-          return;
-        }
-        if (file.size > 10 * 1024 * 1024) {
-          formStatus.textContent = "File must be under 10MB.";
-          return;
-        }
-        setFormBusy(true);
-        formStatus.textContent = "Uploading photo…";
-        try {
+        if (mode === "add") {
+          const file = fileField.files?.[0];
+          console.log("Customer photo upload clicked.", {
+            customerId: customer.id,
+            fileName: file?.name || "",
+            caption,
+            store_location: storeLocation,
+          });
+          if (!file) {
+            formStatus.textContent = "Please choose a photo file.";
+            showSnackbar("Please choose a photo file");
+            return;
+          }
+          const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
+          if (file.type && !allowedTypes.includes(file.type)) {
+            formStatus.textContent = "Unsupported file type. Use JPG, PNG, or WebP.";
+            showSnackbar("Unsupported file type. Use JPG, PNG, or WebP.");
+            return;
+          }
+          if (file.size > 10 * 1024 * 1024) {
+            formStatus.textContent = "File must be under 10MB.";
+            showSnackbar("File must be under 10MB.");
+            return;
+          }
+          formStatus.textContent = "Uploading photo…";
           await addCustomerPhoto(customer.id, file, caption, storeLocation);
           state.customerPhotos[customer.id] = await getCustomerPhotos(customer.id);
           await refreshCustomerPhotoUrls(customer.id);
           renderCustomerPhotos(customer.id, canEdit);
           showSnackbar("Photo uploaded.");
           form.reset();
-          setFormVisibility(false);
-        } catch (error) {
-          console.error(error);
-          const message = error?.message || "Upload failed. Please try again.";
-          formStatus.textContent = message;
-          showSnackbar(message);
-        } finally {
-          setFormBusy(false);
+          captionField.value = "";
+          locationField.value = "";
+          fileField.value = "";
+          setFormMode("add");
+          return;
         }
-        return;
-      }
-      if (!photoId) return;
-      setFormBusy(true);
-      formStatus.textContent = "Saving changes…";
-      try {
+        if (!photoId) return;
+        formStatus.textContent = "Saving changes…";
         await updateCustomerPhoto(photoId, {
           caption,
           store_location: storeLocation,
@@ -3662,27 +3672,18 @@ function setupCustomerPhotosSection(customer) {
         await refreshCustomerPhotoUrls(customer.id);
         renderCustomerPhotos(customer.id, canEdit);
         showSnackbar("Photo updated.");
-        setFormVisibility(false);
       } catch (error) {
-        console.error(error);
-        const message = error?.message || "Unable to save changes.";
+        console.error("Customer photo submit failed.", error);
+        const message =
+          mode === "add"
+            ? error?.message || "Upload failed. Please try again."
+            : error?.message || "Unable to save changes.";
         formStatus.textContent = message;
         showSnackbar(message);
       } finally {
         setFormBusy(false);
       }
     });
-    if (submitButton) {
-      submitButton.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (form.requestSubmit) {
-          form.requestSubmit();
-        } else {
-          form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
-        }
-      });
-    }
   }
 
   (async () => {
@@ -3906,7 +3907,7 @@ function openCustomerModal(customer = {}) {
           <div id="customerPhotoFormStatus" class="muted"></div>
           <div class="form-actions">
             <button class="secondary" type="button" id="customerPhotoCancel">Cancel</button>
-            <button class="primary" type="button" id="customerPhotoSubmit">Upload photo</button>
+            <button class="primary" type="submit" id="customerPhotoSubmit">Upload photo</button>
           </div>
         </form>
         <div id="customerPhotosGrid" class="photo-grid"></div>
