@@ -1859,6 +1859,33 @@ function renderDashboard() {
     searchTerm,
   });
 
+  const normalizeAgendaType = (item) => {
+    const rawType = item.kind === "custom_oneoff" ? item.oneOffKind : item.kind;
+    if (!rawType) return "";
+    const normalized = String(rawType)
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, "_");
+    if (
+      [
+        "expected",
+        "expected_order",
+        "expected_orders",
+        "expectedorder",
+        "order_expected",
+        "orders_expected",
+      ].includes(normalized)
+    ) {
+      return "expected_order";
+    }
+    return normalized;
+  };
+
+  const expectedOrdersCount = items.filter(
+    (item) => normalizeAgendaType(item) === "expected_order"
+  ).length;
+  const safeExpectedOrdersCount = Number.isFinite(expectedOrdersCount) ? expectedOrdersCount : 0;
+
   const ordersPut = items.filter(
     (item) =>
       (item.kind === "expected_order" && item.orderMode === "THEY_PUT_ORDER") ||
@@ -1880,10 +1907,18 @@ function renderDashboard() {
     (item) => item.kind === "delivery" || (item.kind === "custom_oneoff" && item.oneOffKind === "delivery")
   );
 
-  elements.todayOrdersPutCount.textContent = ordersPut.length;
+  elements.todayOrdersPutCount.textContent = safeExpectedOrdersCount;
   elements.todayOrdersGetCount.textContent = ordersGet.length;
   elements.todayPacksCount.textContent = packs.length;
   elements.todayDeliveriesCount.textContent = deliveries.length;
+
+  if (typeof process !== "undefined" && process.env?.NODE_ENV !== "production") {
+    console.log("Dashboard expected orders debug", {
+      expectedOrdersCount: safeExpectedOrdersCount,
+      todayTasksCount: items.length,
+      sampleTypes: items.slice(0, 5).map((item) => item.kind || item.oneOffKind || item.type),
+    });
+  }
 
   elements.todayOrdersPutList.innerHTML =
     ordersPut.map(agendaItemCard).join("") || "<p class=\"muted\">No customers placing orders today.</p>";
