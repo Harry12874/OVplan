@@ -40,6 +40,12 @@ import {
   supabaseInitError,
   validateSupabaseConfig,
 } from "./supabase_client.js";
+import {
+  listCustomerPhotos,
+  uploadCustomerPhoto,
+  updateCustomerPhoto,
+  deleteCustomerPhoto,
+} from "./lib/customerPhotos.js";
 
 const BUILD_ID = new URL(import.meta.url).searchParams.get("v") || "dev";
 // TODO: Replace "dev" fallback with a build-time injected value.
@@ -53,7 +59,6 @@ const state = {
   oneOffItems: [],
   stickyNotes: [],
   customerPhotos: {},
-  customerPhotoUrlCache: {},
   settings: {},
   session: null,
   profileRole: null,
@@ -769,6 +774,8 @@ function showSnackbar(message, undoFn) {
     lastUndo = null;
   }, 6000);
 }
+
+globalThis.showSnackbar = showSnackbar;
 
 function hideSnackbar() {
   elements.snackbar.classList.add("hidden");
@@ -3324,97 +3331,17 @@ function customerPhotoStatusMessage(customerId) {
 
 async function getCustomerPhotos(customerId) {
   if (!customerId || !supabaseAvailable || !state.session) return [];
-  const { data, error } = await supabase
-    .from("customer_photos")
-    .select("*")
-    .eq("customer_id", customerId)
-    .order("created_at", { ascending: false });
-  if (error) {
+  try {
+    return await listCustomerPhotos(customerId);
+  } catch (error) {
     console.error("Failed to load customer photos.", error);
     showSnackbar("Unable to load customer photos.");
     return [];
   }
-  return data || [];
-}
-
-async function refreshCustomerPhotoUrls(customerId) {
-  const photos = state.customerPhotos[customerId] || [];
-  if (!photos.length || !supabaseAvailable) return;
-  const urlEntries = await Promise.all(
-    photos.map(async (photo) => {
-      const { data, error } = await supabase.storage
-        .from("customer-photos")
-        .createSignedUrl(photo.image_path, 60 * 60 * 24);
-      if (error) {
-        console.warn("Failed to create signed URL.", error.message || error);
-        return null;
-      }
-      return [photo.image_path, data?.signedUrl || ""];
-    })
-  );
-  urlEntries.forEach((entry) => {
-    if (!entry) return;
-    const [path, url] = entry;
-    state.customerPhotoUrlCache[path] = url;
-  });
 }
 
 function getCustomerPhotoUrl(photo) {
-  return state.customerPhotoUrlCache[photo.image_path] || "";
-}
-
-async function addCustomerPhoto(customerId, file, caption, storeLocation) {
-  if (!supabaseAvailable || !state.session) {
-    throw new Error("Supabase is unavailable.");
-  }
-  if (!file) {
-    throw new Error("No file selected.");
-  }
-  const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
-  const path = `${customerId}/${crypto.randomUUID()}.${ext}`;
-  const { error: uploadError } = await supabase.storage
-    .from("customer-photos")
-    .upload(path, file, { contentType: file.type || undefined, upsert: false });
-  if (uploadError) {
-    console.error("Customer photo upload failed.", uploadError);
-    throw uploadError;
-  }
-  const { error: insertError } = await supabase.from("customer_photos").insert({
-    customer_id: customerId,
-    image_path: path,
-    caption,
-    store_location: storeLocation,
-  });
-  if (insertError) {
-    console.error("Customer photo insert failed.", insertError);
-    await supabase.storage.from("customer-photos").remove([path]);
-    throw insertError;
-  }
-}
-
-async function updateCustomerPhoto(photoId, fields) {
-  if (!supabaseAvailable || !state.session) {
-    throw new Error("Supabase is unavailable.");
-  }
-  const { error } = await supabase.from("customer_photos").update(fields).eq("id", photoId);
-  if (error) throw error;
-}
-
-async function deleteCustomerPhoto(photoId) {
-  if (!supabaseAvailable || !state.session) {
-    throw new Error("Supabase is unavailable.");
-  }
-  const { data, error } = await supabase
-    .from("customer_photos")
-    .select("id, image_path")
-    .eq("id", photoId)
-    .single();
-  if (error) throw error;
-  if (data?.image_path) {
-    await supabase.storage.from("customer-photos").remove([data.image_path]);
-  }
-  const { error: deleteError } = await supabase.from("customer_photos").delete().eq("id", photoId);
-  if (deleteError) throw deleteError;
+  return photo?.signedUrl || "";
 }
 
 function ensurePhotoLightbox() {
@@ -3508,13 +3435,16 @@ function setupCustomerPhotosSection(customer) {
   const form = document.getElementById("customerPhotoForm");
   const formTitle = document.getElementById("customerPhotoFormTitle");
   const fileField = document.getElementById("customerPhotoFile");
+  const fileError = document.getElementById("customerPhotoFileError");
   const captionField = document.getElementById("customerPhotoCaption");
   const locationField = document.getElementById("customerPhotoLocation");
   const submitButton = document.getElementById("customerPhotoSubmit");
   const cancelButton = document.getElementById("customerPhotoCancel");
   const formStatus = document.getElementById("customerPhotoFormStatus");
+  const debugLine = document.getElementById("customerPhotoDebug");
   const grid = document.getElementById("customerPhotosGrid");
   let isUploading = false;
+  let formError = "";
   if (status) status.textContent = customerPhotoStatusMessage(customer.id);
   renderCustomerPhotos(customer.id, canEdit);
   if (!customer.id) {
@@ -3534,6 +3464,9 @@ function setupCustomerPhotosSection(customer) {
     submitButton.textContent = mode === "edit" ? "Save changes" : "Upload photo";
     captionField.value = photo?.caption || "";
     locationField.value = photo?.store_location || "";
+    if (fileError) fileError.textContent = "";
+    if (formStatus) formStatus.textContent = "";
+    formError = "";
     fileField.disabled = mode === "edit";
     const fileWrap = fileField?.parentElement;
     if (fileWrap) {
@@ -3557,11 +3490,38 @@ function setupCustomerPhotosSection(customer) {
     }
   };
 
+  const setFormError = (message, { fileOnly = false } = {}) => {
+    formError = message || "";
+    if (fileError) {
+      fileError.textContent = fileOnly ? formError : "";
+    }
+    if (formStatus) {
+      formStatus.textContent = fileOnly ? "" : formError;
+    }
+    if (formError) {
+      showSnackbar(formError);
+    }
+    updateDebugLine();
+  };
+
+  const updateDebugLine = () => {
+    if (!debugLine) return;
+    if (BUILD_ID !== "dev") {
+      debugLine.textContent = "";
+      debugLine.classList.add("hidden");
+      return;
+    }
+    const fileName = fileField?.files?.[0]?.name || "none";
+    debugLine.textContent = `Debug: customerId=${customer.id || "none"} • file=${fileName} • error=${formError || "none"}`;
+    debugLine.classList.remove("hidden");
+  };
+
   if (addButton) {
     addButton.addEventListener("click", (event) => {
       event.stopPropagation();
       setFormMode("add");
       setFormVisibility(true);
+      updateDebugLine();
     });
     addButton.disabled = !canEdit || !customer.id;
   }
@@ -3570,6 +3530,9 @@ function setupCustomerPhotosSection(customer) {
       event.stopPropagation();
       setFormVisibility(false);
     });
+  }
+  if (fileField) {
+    fileField.addEventListener("change", updateDebugLine);
   }
 
   if (grid) {
@@ -3581,23 +3544,22 @@ function setupCustomerPhotosSection(customer) {
       const photo = photos.find((item) => item.id === photoId);
       if (!photo) return;
       const action = button.dataset.action;
-      if (action === "view-photo") {
-        showPhotoLightbox(photo);
-      } else if (action === "edit-photo" && canEdit) {
-        setFormMode("edit", photo);
-        setFormVisibility(true);
-      } else if (action === "delete-photo" && canEdit) {
-        if (!confirm("Delete this photo? This cannot be undone.")) return;
-        (async () => {
-          try {
-            await deleteCustomerPhoto(photoId);
-            state.customerPhotos[customer.id] = await getCustomerPhotos(customer.id);
-            await refreshCustomerPhotoUrls(customer.id);
-            renderCustomerPhotos(customer.id, canEdit);
-            showSnackbar("Photo deleted.");
-          } catch (error) {
-            console.error(error);
-            showSnackbar("Unable to delete photo.");
+        if (action === "view-photo") {
+          showPhotoLightbox(photo);
+        } else if (action === "edit-photo" && canEdit) {
+          setFormMode("edit", photo);
+          setFormVisibility(true);
+        } else if (action === "delete-photo" && canEdit) {
+          if (!confirm("Delete this photo? This cannot be undone.")) return;
+          (async () => {
+            try {
+              await deleteCustomerPhoto({ id: photoId });
+              state.customerPhotos[customer.id] = await getCustomerPhotos(customer.id);
+              renderCustomerPhotos(customer.id, canEdit);
+              showSnackbar("Photo deleted.");
+            } catch (error) {
+              console.error(error);
+              showSnackbar("Unable to delete photo.");
           }
         })();
       }
@@ -3611,9 +3573,17 @@ function setupCustomerPhotosSection(customer) {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (!canEdit) return;
-      if (isUploading) return;
-      formStatus.textContent = "";
+      if (!canEdit) {
+        console.error("Customer photo upload blocked: insufficient permissions.");
+        setFormError("You don’t have permission to upload photos.");
+        return;
+      }
+      if (isUploading) {
+        return;
+      }
+      if (formStatus) formStatus.textContent = "";
+      if (fileError) fileError.textContent = "";
+      formError = "";
       const mode = form.dataset.mode || "add";
       const photoId = form.dataset.photoId || "";
       const caption = captionField.value.trim();
@@ -3621,8 +3591,8 @@ function setupCustomerPhotosSection(customer) {
       setFormBusy(true);
       try {
         if (!customer.id) {
-          formStatus.textContent = "Missing customer id.";
-          showSnackbar("Missing customer id");
+          console.error("Customer photo upload failed: missing customer id.");
+          setFormError("Missing customer id.");
           return;
         }
         if (mode === "add") {
@@ -3634,25 +3604,29 @@ function setupCustomerPhotosSection(customer) {
             store_location: storeLocation,
           });
           if (!file) {
-            formStatus.textContent = "Please choose a photo file.";
-            showSnackbar("Please choose a photo file");
+            console.error("Customer photo upload failed: no file selected.");
+            setFormError("Please choose a photo file.", { fileOnly: true });
             return;
           }
           const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
           if (file.type && !allowedTypes.includes(file.type)) {
-            formStatus.textContent = "Unsupported file type. Use JPG, PNG, or WebP.";
-            showSnackbar("Unsupported file type. Use JPG, PNG, or WebP.");
+            console.error("Customer photo upload failed: unsupported file type.", file.type);
+            setFormError("Unsupported file type. Use JPG, PNG, or WebP.", { fileOnly: true });
             return;
           }
           if (file.size > 10 * 1024 * 1024) {
-            formStatus.textContent = "File must be under 10MB.";
-            showSnackbar("File must be under 10MB.");
+            console.error("Customer photo upload failed: file too large.", file.size);
+            setFormError("File must be under 10MB.", { fileOnly: true });
             return;
           }
           formStatus.textContent = "Uploading photo…";
-          await addCustomerPhoto(customer.id, file, caption, storeLocation);
+          await uploadCustomerPhoto({
+            customerId: customer.id,
+            file,
+            caption,
+            store_location: storeLocation,
+          });
           state.customerPhotos[customer.id] = await getCustomerPhotos(customer.id);
-          await refreshCustomerPhotoUrls(customer.id);
           renderCustomerPhotos(customer.id, canEdit);
           showSnackbar("Photo uploaded.");
           form.reset();
@@ -3660,16 +3634,17 @@ function setupCustomerPhotosSection(customer) {
           locationField.value = "";
           fileField.value = "";
           setFormMode("add");
+          updateDebugLine();
           return;
         }
-        if (!photoId) return;
+        if (!photoId) {
+          console.error("Customer photo update failed: missing photo id.");
+          setFormError("Missing photo id.");
+          return;
+        }
         formStatus.textContent = "Saving changes…";
-        await updateCustomerPhoto(photoId, {
-          caption,
-          store_location: storeLocation,
-        });
+        await updateCustomerPhoto({ id: photoId, caption, store_location: storeLocation });
         state.customerPhotos[customer.id] = await getCustomerPhotos(customer.id);
-        await refreshCustomerPhotoUrls(customer.id);
         renderCustomerPhotos(customer.id, canEdit);
         showSnackbar("Photo updated.");
       } catch (error) {
@@ -3678,18 +3653,18 @@ function setupCustomerPhotosSection(customer) {
           mode === "add"
             ? error?.message || "Upload failed. Please try again."
             : error?.message || "Unable to save changes.";
-        formStatus.textContent = message;
-        showSnackbar(message);
+        setFormError(message);
       } finally {
         setFormBusy(false);
       }
     });
   }
 
+  updateDebugLine();
+
   (async () => {
     if (!state.session || !supabaseAvailable) return;
     state.customerPhotos[customer.id] = await getCustomerPhotos(customer.id);
-    await refreshCustomerPhotoUrls(customer.id);
     renderCustomerPhotos(customer.id, canEdit);
   })();
 }
@@ -3898,6 +3873,7 @@ function openCustomerModal(customer = {}) {
           <label id="customerPhotoFileWrap">Photo file
             <input id="customerPhotoFile" name="photoFile" type="file" accept="image/jpeg,image/png,image/webp" />
           </label>
+          <div id="customerPhotoFileError" class="form-error"></div>
           <label>Caption
             <input id="customerPhotoCaption" name="caption" placeholder="Front door display" />
           </label>
@@ -3909,6 +3885,7 @@ function openCustomerModal(customer = {}) {
             <button class="secondary" type="button" id="customerPhotoCancel">Cancel</button>
             <button class="primary" type="submit" id="customerPhotoSubmit">Upload photo</button>
           </div>
+          <div id="customerPhotoDebug" class="muted photo-debug hidden"></div>
         </form>
         <div id="customerPhotosGrid" class="photo-grid"></div>
         <p id="customerPhotosEmpty" class="muted"></p>
@@ -4978,7 +4955,6 @@ function clearAppState() {
   state.oneOffItems = [];
   state.stickyNotes = [];
   state.customerPhotos = {};
-  state.customerPhotoUrlCache = {};
   state.profileRole = null;
 }
 
