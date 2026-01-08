@@ -421,6 +421,16 @@ body {
   background: rgba(111, 125, 82, 0.06);
 }
 
+.form-error {
+  color: #b42318;
+  font-size: 0.85rem;
+}
+
+.photo-debug {
+  font-size: 0.75rem;
+  word-break: break-word;
+}
+
 .photo-lightbox {
   position: fixed;
   inset: 0;
