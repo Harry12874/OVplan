@@ -1655,6 +1655,18 @@ async function syncDeleteScheduleEvent(eventId) {
   if (error) throw error;
 }
 
+async function syncDeleteStickyNote(noteId) {
+  setCloudStatus("syncing");
+  const { error } = await supabase.from("sticky_notes").delete().eq("id", noteId);
+  if (error) throw error;
+}
+
+async function syncDeleteCustomer(customerId) {
+  setCloudStatus("syncing");
+  const { error } = await supabase.from("customers").delete().eq("id", customerId);
+  if (error) throw error;
+}
+
 async function syncPushAll() {
   if (!state.session) return;
   await syncUpsertBatch("customers", state.customers, mapCustomerToSupabase);
@@ -3740,6 +3752,74 @@ function renderCustomerActivity(customerId) {
   `;
 }
 
+async function deleteCustomerAndRelated(customer) {
+  if (!customer?.id) return;
+  if (!canWrite()) {
+    showOfflineAlert();
+    return;
+  }
+  const customerLabel = customer.storeName || "this customer";
+  const ordersToDelete = state.orders.filter((order) => order.customerId === customer.id);
+  const oneOffItemsToDelete = state.oneOffItems.filter((item) => item.customerId === customer.id);
+  const scheduleEventsToDelete = state.scheduleEvents.filter((event) => event.customerId === customer.id);
+  const notesToDelete = state.stickyNotes.filter((note) => note.customer_id === customer.id);
+  const confirmation = confirm(
+    `Delete ${customerLabel}? This will remove ${ordersToDelete.length} order(s), ${oneOffItemsToDelete.length} one-off item(s), ${scheduleEventsToDelete.length} schedule event(s), and ${notesToDelete.length} sticky note(s).`
+  );
+  if (!confirmation) return;
+
+  if (state.session && supabaseAvailable) {
+    try {
+      await syncDeleteCustomer(customer.id);
+      for (const event of scheduleEventsToDelete) {
+        await syncDeleteScheduleEvent(event.id);
+      }
+      for (const note of notesToDelete) {
+        await syncDeleteStickyNote(note.id);
+      }
+      const photos = state.customerPhotos[customer.id] || [];
+      for (const photo of photos) {
+        await deleteCustomerPhoto({ id: photo.id });
+      }
+      updateConnectionStatus({ status: "Online/Synced", canWrite: true });
+      setCloudStatus("synced", toISO());
+    } catch (error) {
+      console.error("Supabase delete failed", error);
+      handleSupabaseError(error, { context: "Supabase delete failed", alertOnOffline: true });
+      return;
+    }
+  }
+
+  await deleteItem("customers", customer.id);
+  state.customers = state.customers.filter((item) => item.id !== customer.id);
+
+  for (const order of ordersToDelete) {
+    await deleteItem("orders", order.id);
+    await removeTasksForOrder(order.id);
+  }
+  state.orders = state.orders.filter((order) => order.customerId !== customer.id);
+
+  for (const event of scheduleEventsToDelete) {
+    await deleteItem("schedule_events", event.id);
+  }
+  state.scheduleEvents = state.scheduleEvents.filter((event) => event.customerId !== customer.id);
+
+  for (const item of oneOffItemsToDelete) {
+    await deleteItem("one_off_items", item.id);
+  }
+  state.oneOffItems = state.oneOffItems.filter((item) => item.customerId !== customer.id);
+
+  for (const note of notesToDelete) {
+    await deleteItem("sticky_notes", note.id);
+  }
+  state.stickyNotes = state.stickyNotes.filter((note) => note.customer_id !== customer.id);
+
+  delete state.customerPhotos[customer.id];
+  closeModal();
+  renderAll();
+  showSnackbar("Customer deleted.");
+}
+
 function openCustomerModal(customer = {}) {
   const orderChannel = customer.orderChannel || customer.channelPreference || "portal";
   const schedule = customer.schedule || defaultSchedule();
@@ -3930,6 +4010,7 @@ function openCustomerModal(customer = {}) {
         ${renderCustomerActivity(customer.id)}
       </div>
       <div class="form-actions">
+        ${customer.id ? '<button class="ghost danger" type="button" id="deleteCustomerBtn" data-action="delete">Delete</button>' : ""}
         <button class="secondary" type="button" id="cancelCustomer">Cancel</button>
         <button class="primary" type="submit">Save</button>
       </div>
@@ -3938,6 +4019,10 @@ function openCustomerModal(customer = {}) {
   disableFormIfOffline("customerForm");
 
   document.getElementById("cancelCustomer").addEventListener("click", closeModal);
+  const deleteCustomerBtn = document.getElementById("deleteCustomerBtn");
+  if (deleteCustomerBtn) {
+    deleteCustomerBtn.addEventListener("click", () => deleteCustomerAndRelated(customer));
+  }
   const scheduleModeSelect = document.querySelector("select[name='scheduleMode']");
   const scheduleFrequencySelect = document.querySelector("select[name='scheduleFrequency']");
   const anchorWrap = document.getElementById("scheduleAnchorWrap");
