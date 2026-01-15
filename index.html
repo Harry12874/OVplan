@@ -454,6 +454,41 @@
                 <button class="btn btn-secondary tab" data-tab="backup">Backup & Restore</button>
               </div>
             </div>
+            <div id="debugPanel" class="card debug-panel hidden">
+              <h3>Day index debug (dev only)</h3>
+              <p class="muted">All day indexes use Mon0 (0=Mon … 6=Sun).</p>
+              <div class="debug-grid">
+                <div>
+                  <div class="muted">Today (Melbourne)</div>
+                  <strong id="debugTodayIndex">—</strong>
+                  <span class="muted" id="debugTodayLabel">—</span>
+                </div>
+                <div>
+                  <div class="muted">Orders today</div>
+                  <strong id="debugOrdersCount">—</strong>
+                </div>
+                <div>
+                  <div class="muted">Packs today</div>
+                  <strong id="debugPacksCount">—</strong>
+                </div>
+                <div>
+                  <div class="muted">Deliveries today</div>
+                  <strong id="debugDeliveriesCount">—</strong>
+                </div>
+              </div>
+              <div class="debug-section">
+                <h4>Sample customers</h4>
+                <div id="debugSampleCustomers"></div>
+              </div>
+              <div class="debug-section">
+                <h4>Day index scan</h4>
+                <p class="muted" id="debugDayCounts">—</p>
+                <button id="migrateDayIndexBtn" class="btn btn-secondary" data-requires-online="true">
+                  Migrate day arrays (Sun0 → Mon0)
+                </button>
+                <p class="muted" id="dayMigrationStatus"></p>
+              </div>
+            </div>
           </section>
         </main>
       </div>
