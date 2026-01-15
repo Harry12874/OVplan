@@ -86,7 +86,7 @@ function toISO(date = new Date()) {
 function startOfWeek(dateKey) {
   const date = dateKeyToDate(dateKey);
   const day = dayIndexFromDateKey(dateKey);
-  const diff = day === 0 ? -6 : 1 - day;
+  const diff = -day;
   date.setUTCDate(date.getUTCDate() + diff);
   return dateKeyFromDate(date);
 }
@@ -180,7 +180,7 @@ function dayIndexFromDateKey(dateKey) {
     weekday: "short",
   });
   const label = formatter.format(dateKeyToDate(dateKey));
-  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   return dayNames.indexOf(label);
 }
 
