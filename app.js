@@ -178,6 +178,7 @@ function loadElements() {
     stickyNotesSections: document.getElementById("stickyNotesSections"),
     newOrderBtn: document.getElementById("newOrderBtn"),
     newCustomerBtn: document.getElementById("newCustomerBtn"),
+    dbHealthCheckBtn: document.getElementById("dbHealthCheckBtn"),
     newRepBtn: document.getElementById("newRepBtn"),
     sampleDataBtn: document.getElementById("sampleDataBtn"),
     helpBtn: document.getElementById("helpBtn"),
@@ -240,7 +241,7 @@ const cadenceLabels = {
   unset: "Schedule not set",
 };
 
-const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 const orderTermsOptions = [
   { label: "Order through portal", value: "portal" },
@@ -395,6 +396,75 @@ function defaultSchedule() {
     packDays: [],
     anchorDate: null,
   };
+}
+
+const dayLabelToIndex = {
+  mon: 0,
+  monday: 0,
+  tue: 1,
+  tues: 1,
+  tuesday: 1,
+  wed: 2,
+  weds: 2,
+  wednesday: 2,
+  thu: 3,
+  thur: 3,
+  thurs: 3,
+  thursday: 3,
+  fri: 4,
+  friday: 4,
+  sat: 5,
+  saturday: 5,
+  sun: 6,
+  sunday: 6,
+};
+
+function normalizeDayNumber(value) {
+  if (!Number.isFinite(value)) return null;
+  const intValue = Math.trunc(value);
+  if (intValue >= 0 && intValue <= 6) return intValue;
+  if (intValue >= 1 && intValue <= 7) return intValue - 1;
+  return null;
+}
+
+function normalizeDayValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return normalizeDayNumber(value);
+  if (typeof value === "string") {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return null;
+    const numeric = Number(trimmed);
+    if (!Number.isNaN(numeric)) return normalizeDayNumber(numeric);
+    return dayLabelToIndex[trimmed] ?? null;
+  }
+  return null;
+}
+
+function normalizeDayArray(values = []) {
+  if (!Array.isArray(values)) return [];
+  const normalized = values
+    .map(normalizeDayValue)
+    .filter((value) => value !== null && value >= 0 && value <= 6);
+  const unique = Array.from(new Set(normalized));
+  unique.sort((a, b) => a - b);
+  return unique;
+}
+
+function normalizeSchedule(schedule = {}) {
+  const base = { ...defaultSchedule(), ...schedule };
+  return {
+    ...base,
+    customerOrderDays: normalizeDayArray(base.customerOrderDays),
+    deliverDays: normalizeDayArray(base.deliverDays),
+    packDays: normalizeDayArray(base.packDays),
+  };
+}
+
+function isValidDayArray(values = []) {
+  return (
+    Array.isArray(values) &&
+    values.every((value) => Number.isInteger(value) && value >= 0 && value <= 6)
+  );
 }
 
 function helpIcon(text) {
@@ -727,6 +797,11 @@ async function loadState({ useLocalCustomers = true, useLocalScheduleEvents = tr
       }
       if (!updated.schedule.packDays) {
         updated.schedule.packDays = [];
+        touched = true;
+      }
+      const normalizedSchedule = normalizeSchedule(updated.schedule);
+      if (JSON.stringify(normalizedSchedule) !== JSON.stringify(updated.schedule)) {
+        updated.schedule = normalizedSchedule;
         touched = true;
       }
     }
@@ -1450,7 +1525,7 @@ function monthGridRange(dateKey) {
   const monthEnd = endOfMonth(dateKey);
   const gridStart = startOfWeekMonday(monthStart);
   const endDay = dayIndexFromDateKey(monthEnd);
-  const trailing = endDay === 0 ? 0 : 7 - endDay;
+  const trailing = endDay === 6 ? 0 : 6 - endDay;
   const gridEnd = addDays(monthEnd, trailing);
   return { gridStart, gridEnd };
 }
@@ -1505,19 +1580,56 @@ function formatRangeLabel(viewMode, anchorDate) {
 }
 
 function mapCustomerToSupabase(customer) {
+  const schedule = normalizeSchedule(customer.schedule || {});
   return {
     id: customer.id,
-    data_json: customer,
-    updated_at: toISO(),
+    customer_id: customer.customerId || null,
+    store_name: customer.storeName || "",
+    address: customer.fullAddress || "",
+    suburb: customer.suburb1 || "",
+    state: customer.state1 || "",
+    postcode: customer.postcode1 || "",
+    contact_name: customer.contactName || "",
+    phone: customer.phone || "",
+    email: customer.email || "",
+    delivery_notes: customer.deliveryNotes || "",
+    delivery_terms: customer.deliveryTerms || "",
+    assigned_rep_id: customer.assignedRepId || null,
+    order_channel: customer.orderChannel || "portal",
+    average_order_value: customer.averageOrderValue ?? null,
+    delivery_days: schedule.deliverDays || [],
+    packing_days: schedule.packDays || [],
+    order_days: schedule.customerOrderDays || [],
   };
 }
 
 function mapCustomerFromSupabase(row) {
   const data = row?.data_json || {};
+  const schedule = normalizeSchedule({
+    ...(data.schedule || {}),
+    customerOrderDays: row?.order_days ?? data.schedule?.customerOrderDays,
+    deliverDays: row?.delivery_days ?? data.schedule?.deliverDays,
+    packDays: row?.packing_days ?? data.schedule?.packDays,
+  });
   return {
     ...data,
-    id: row?.id,
-    schedule: data.schedule || defaultSchedule(),
+    id: row?.id || data.id,
+    customerId: row?.customer_id ?? data.customerId ?? data.externalCustomerId ?? "",
+    storeName: row?.store_name ?? data.storeName ?? "",
+    contactName: row?.contact_name ?? data.contactName ?? "",
+    phone: row?.phone ?? data.phone ?? "",
+    email: row?.email ?? data.email ?? "",
+    fullAddress: row?.address ?? data.fullAddress ?? "",
+    suburb1: row?.suburb ?? data.suburb1 ?? data.suburb ?? "",
+    state1: row?.state ?? data.state1 ?? data.state ?? "",
+    postcode1: row?.postcode ?? data.postcode1 ?? data.postcode ?? "",
+    deliveryNotes: row?.delivery_notes ?? data.deliveryNotes ?? "",
+    deliveryTerms: row?.delivery_terms ?? data.deliveryTerms ?? "",
+    assignedRepId: row?.assigned_rep_id ?? data.assignedRepId ?? "",
+    orderChannel: row?.order_channel ?? data.orderChannel ?? data.channelPreference ?? "portal",
+    averageOrderValue: row?.average_order_value ?? data.averageOrderValue ?? null,
+    extraFields: data.extraFields || {},
+    schedule,
   };
 }
 
@@ -1583,7 +1695,8 @@ async function loadFromSupabase() {
   try {
     const { data: customersData, error: customersError } = await supabase
       .from("customers")
-      .select("id,data_json");
+      .select("*")
+      .eq("owner_id", state.session.user.id);
     if (customersError) throw customersError;
     const { data: eventsData, error: eventsError } = await supabase
       .from("schedule_events")
@@ -1629,14 +1742,66 @@ async function loadFromSupabase() {
   }
 }
 
-async function syncUpsertCustomer(customer) {
+async function syncUpsertCustomer(customer, { mode } = {}) {
   const payload = mapCustomerToSupabase(customer);
+  const userId = state.session?.user?.id;
+  if (BUILD_ID === "dev") {
+    console.log("Customer payload", payload);
+  }
   setCloudStatus("syncing");
-  const { error } = await supabase.from("customers").upsert(payload, {
-    onConflict: "id",
-  });
-  if (!error) return;
-  throw error;
+  let data;
+  let error;
+  if (mode === "insert") {
+    ({ data, error } = await supabase.from("customers").insert(payload).select("*").single());
+  } else {
+    const updatePayload = { ...payload, updated_at: toISO() };
+    let query = supabase.from("customers").update(updatePayload).eq("id", customer.id);
+    if (userId) {
+      query = query.eq("owner_id", userId);
+    }
+    ({ data, error } = await query.select("*").single());
+  }
+  if (error) throw error;
+  if (BUILD_ID === "dev") {
+    console.log("Customer row saved", data);
+  }
+  return mapCustomerFromSupabase(data);
+}
+
+async function runCustomerDbHealthCheck() {
+  if (!state.session || !supabaseAvailable) {
+    showSnackbar("Sign in to run the DB health check.");
+    return;
+  }
+  try {
+    let query = supabase
+      .from("customers")
+      .select("id,store_name,delivery_days,packing_days,order_days")
+      .limit(5);
+    if (state.session?.user?.id) {
+      query = query.eq("owner_id", state.session.user.id);
+    }
+    const { data, error } = await query;
+    if (error) throw error;
+    const summary = (data || []).map((row) => ({
+      id: row.id,
+      store_name: row.store_name,
+      delivery_days: row.delivery_days,
+      delivery_days_type: Array.isArray(row.delivery_days) ? "array" : typeof row.delivery_days,
+      delivery_days_valid: isValidDayArray(row.delivery_days || []),
+      packing_days: row.packing_days,
+      packing_days_type: Array.isArray(row.packing_days) ? "array" : typeof row.packing_days,
+      packing_days_valid: isValidDayArray(row.packing_days || []),
+      order_days: row.order_days,
+      order_days_type: Array.isArray(row.order_days) ? "array" : typeof row.order_days,
+      order_days_valid: isValidDayArray(row.order_days || []),
+    }));
+    console.log("DB health check: customer day arrays", summary);
+    showSnackbar("DB health check complete. See console for details.");
+  } catch (error) {
+    console.error("DB health check failed.", error);
+    showSnackbar(error?.message || "DB health check failed.");
+  }
 }
 
 async function syncUpsertScheduleEvent(event) {
@@ -1663,7 +1828,11 @@ async function syncDeleteStickyNote(noteId) {
 
 async function syncDeleteCustomer(customerId) {
   setCloudStatus("syncing");
-  const { error } = await supabase.from("customers").delete().eq("id", customerId);
+  let query = supabase.from("customers").delete().eq("id", customerId);
+  if (state.session?.user?.id) {
+    query = query.eq("owner_id", state.session.user.id);
+  }
+  const { error } = await query;
   if (error) throw error;
 }
 
@@ -3822,7 +3991,7 @@ async function deleteCustomerAndRelated(customer) {
 
 function openCustomerModal(customer = {}) {
   const orderChannel = customer.orderChannel || customer.channelPreference || "portal";
-  const schedule = customer.schedule || defaultSchedule();
+  const schedule = normalizeSchedule(customer.schedule || {});
   const canEditPhotos = canEditCustomerPhotos();
   showModal(`
     <h2>${customer.id ? "Edit customer" : "Add customer"}</h2>
@@ -4067,6 +4236,12 @@ function openCustomerModal(customer = {}) {
       showOfflineAlert();
       return;
     }
+    const saveButton = event.target.querySelector("button[type='submit']");
+    const originalSaveLabel = saveButton?.textContent || "Save";
+    if (saveButton) {
+      saveButton.disabled = true;
+      saveButton.textContent = "Saving…";
+    }
     const formData = new FormData(event.target);
     const address1 = formData.get("address1").trim();
     const suburb1 = formData.get("suburb1").trim();
@@ -4079,6 +4254,10 @@ function openCustomerModal(customer = {}) {
     const scheduleAnchorDate = formData.get("scheduleAnchorDate") || null;
     if ((scheduleFrequency === "FORTNIGHTLY" || scheduleFrequency === "EVERY_3_WEEKS") && !scheduleAnchorDate) {
       alert("Anchor date is required for fortnightly or every 3 weeks schedules.");
+      if (saveButton) {
+        saveButton.disabled = false;
+        saveButton.textContent = originalSaveLabel;
+      }
       return;
     }
     const updated = {
@@ -4127,30 +4306,42 @@ function openCustomerModal(customer = {}) {
       },
       extraFields: customer.extraFields || {},
     };
+    updated.schedule = normalizeSchedule(updated.schedule);
 
     if (!updated.storeName || !updated.fullAddress || !updated.assignedRepId) {
       alert("Store name, address, and assigned rep are required.");
+      if (saveButton) {
+        saveButton.disabled = false;
+        saveButton.textContent = originalSaveLabel;
+      }
       return;
     }
 
     try {
-      await syncUpsertCustomer(updated);
-      await put("customers", updated);
+      const mode = customer.id ? "update" : "insert";
+      const savedCustomer = await syncUpsertCustomer(updated, { mode });
+      await put("customers", savedCustomer);
       updateConnectionStatus({ status: "Online/Synced", canWrite: true });
       setCloudStatus("synced", toISO());
+      const exists = state.customers.find((item) => item.id === savedCustomer.id);
+      if (exists) {
+        state.customers = state.customers.map((item) => (item.id === savedCustomer.id ? savedCustomer : item));
+      } else {
+        state.customers.push(savedCustomer);
+      }
+      showSnackbar("Customer saved.");
+      closeModal();
+      renderAll();
     } catch (error) {
       console.error("Supabase upsert failed", error);
       handleSupabaseError(error, { context: "Supabase upsert failed", alertOnOffline: true });
-      return;
+      showSnackbar(error?.message || "Unable to save customer.");
+    } finally {
+      if (saveButton) {
+        saveButton.disabled = false;
+        saveButton.textContent = originalSaveLabel;
+      }
     }
-    const exists = state.customers.find((item) => item.id === updated.id);
-    if (exists) {
-      state.customers = state.customers.map((item) => (item.id === updated.id ? updated : item));
-    } else {
-      state.customers.push(updated);
-    }
-    closeModal();
-    renderAll();
   });
 }
 
@@ -4963,9 +5154,9 @@ async function loadSampleData() {
       schedule: {
         mode: "WE_GET_ORDER",
         frequency: "WEEKLY",
-        orderDay1: 1,
-        deliverDay1: 2,
-        packDay1: 1,
+        orderDay1: 0,
+        deliverDay1: 1,
+        packDay1: 0,
         isBiWeeklySecondRun: false,
         orderDay2: null,
         deliverDay2: null,
@@ -5011,7 +5202,7 @@ async function loadSampleData() {
         orderDay2: null,
         deliverDay2: null,
         packDay2: null,
-        customerOrderDays: [2],
+        customerOrderDays: [1],
         deliverDays: [],
         packDays: [],
         anchorDate: todayKey(),
@@ -5022,13 +5213,13 @@ async function loadSampleData() {
 
   await bulkPut("reps", [repA, repB]);
   await bulkPut("customers", customers);
-    try {
-      for (const customer of customers) {
-        await syncUpsertCustomer(customer);
-      }
-      updateConnectionStatus({ status: "Online/Synced", canWrite: true });
-      setCloudStatus("synced", toISO());
-    } catch (error) {
+  try {
+    for (const customer of customers) {
+      await syncUpsertCustomer(customer, { mode: "insert" });
+    }
+    updateConnectionStatus({ status: "Online/Synced", canWrite: true });
+    setCloudStatus("synced", toISO());
+  } catch (error) {
     console.error("Supabase upsert failed", error);
     handleSupabaseError(error, { context: "Supabase upsert failed", alertOnOffline: true });
     return;
@@ -5178,6 +5369,13 @@ function setupEvents() {
   on(elements.customersFrequencyFilter, "change", renderCustomers);
   on(elements.customersChannelFilter, "change", renderCustomers);
   on(elements.customersScheduleFilter, "change", renderCustomers);
+  if (elements.dbHealthCheckBtn) {
+    if (BUILD_ID !== "dev") {
+      elements.dbHealthCheckBtn.remove();
+    } else {
+      on(elements.dbHealthCheckBtn, "click", runCustomerDbHealthCheck);
+    }
+  }
   on(elements.newStickyNoteBtn, "click", () => openStickyNoteModal());
   on(elements.stickyNotesSignIn, "click", () => {
     if (!supabaseAvailable) {
