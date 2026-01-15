@@ -46,9 +46,14 @@ import {
   updateCustomerPhoto,
   deleteCustomerPhoto,
 } from "./lib/customerPhotos.js";
+import { getMelbourneDowMon0, labelsToMon0, mon0ToLabel } from "./lib/days.js";
 
 const BUILD_ID = new URL(import.meta.url).searchParams.get("v") || "dev";
 // TODO: Replace "dev" fallback with a build-time injected value.
+const IS_DEV_BUILD =
+  BUILD_ID === "dev" || location.hostname === "localhost" || location.hostname === "127.0.0.1";
+
+const dayNames = Array.from({ length: 7 }, (_, index) => mon0ToLabel(index));
 
 const state = {
   reps: [],
@@ -190,6 +195,16 @@ function loadElements() {
     snackbarUndo: document.getElementById("snackbarUndo"),
     accountEmail: document.getElementById("accountEmail"),
     accountLogoutBtn: document.getElementById("accountLogoutBtn"),
+    debugPanel: document.getElementById("debugPanel"),
+    debugTodayIndex: document.getElementById("debugTodayIndex"),
+    debugTodayLabel: document.getElementById("debugTodayLabel"),
+    debugOrdersCount: document.getElementById("debugOrdersCount"),
+    debugPacksCount: document.getElementById("debugPacksCount"),
+    debugDeliveriesCount: document.getElementById("debugDeliveriesCount"),
+    debugSampleCustomers: document.getElementById("debugSampleCustomers"),
+    debugDayCounts: document.getElementById("debugDayCounts"),
+    migrateDayIndexBtn: document.getElementById("migrateDayIndexBtn"),
+    dayMigrationStatus: document.getElementById("dayMigrationStatus"),
     scheduleSelectModeBtn: document.getElementById("scheduleSelectModeBtn"),
     scheduleSelectAllBtn: document.getElementById("scheduleSelectAllBtn"),
     scheduleExportSelectedBtn: document.getElementById("scheduleExportSelectedBtn"),
@@ -240,8 +255,6 @@ const cadenceLabels = {
   custom: "Custom",
   unset: "Schedule not set",
 };
-
-const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 const orderTermsOptions = [
   { label: "Order through portal", value: "portal" },
@@ -398,27 +411,6 @@ function defaultSchedule() {
   };
 }
 
-const dayLabelToIndex = {
-  mon: 0,
-  monday: 0,
-  tue: 1,
-  tues: 1,
-  tuesday: 1,
-  wed: 2,
-  weds: 2,
-  wednesday: 2,
-  thu: 3,
-  thur: 3,
-  thurs: 3,
-  thursday: 3,
-  fri: 4,
-  friday: 4,
-  sat: 5,
-  saturday: 5,
-  sun: 6,
-  sunday: 6,
-};
-
 function normalizeDayNumber(value) {
   if (!Number.isFinite(value)) return null;
   const intValue = Math.trunc(value);
@@ -435,7 +427,7 @@ function normalizeDayValue(value) {
     if (!trimmed) return null;
     const numeric = Number(trimmed);
     if (!Number.isNaN(numeric)) return normalizeDayNumber(numeric);
-    return dayLabelToIndex[trimmed] ?? null;
+    return labelsToMon0(trimmed) ?? null;
   }
   return null;
 }
@@ -465,6 +457,173 @@ function isValidDayArray(values = []) {
     Array.isArray(values) &&
     values.every((value) => Number.isInteger(value) && value >= 0 && value <= 6)
   );
+}
+
+function formatDayArrayLabel(values = []) {
+  if (!Array.isArray(values) || !values.length) return "—";
+  const labels = values.map((day) => mon0ToLabel(day)).filter(Boolean);
+  return labels.length ? labels.join(", ") : "—";
+}
+
+function dayArrayStats(customers = []) {
+  const counts = Array.from({ length: 7 }, () => 0);
+  let min = null;
+  let max = null;
+  customers.forEach((customer) => {
+    const schedule = customer.schedule || {};
+    [schedule.deliverDays, schedule.packDays, schedule.customerOrderDays].forEach((values) => {
+      if (!Array.isArray(values)) return;
+      values.forEach((value) => {
+        if (!Number.isInteger(value) || value < 0 || value > 6) return;
+        counts[value] += 1;
+        min = min === null ? value : Math.min(min, value);
+        max = max === null ? value : Math.max(max, value);
+      });
+    });
+  });
+  return { counts, min, max };
+}
+
+function debugTodayCounts() {
+  const today = todayKey();
+  const items = buildAgendaItems({
+    dateStart: today,
+    dateEnd: today,
+    toggles: { expectedOrders: true, packs: true, deliveries: true },
+    statusFilter: "all",
+    repFilter: "all",
+    searchTerm: "",
+  });
+  return items.reduce(
+    (summary, item) => {
+      const baseKind = item.kind === "custom_oneoff" ? item.oneOffKind : item.kind;
+      if (baseKind === "expected_order") summary.orders += 1;
+      if (baseKind === "pack") summary.packs += 1;
+      if (baseKind === "delivery") summary.deliveries += 1;
+      return summary;
+    },
+    { orders: 0, packs: 0, deliveries: 0 }
+  );
+}
+
+function updateDebugPanel() {
+  if (!elements.debugPanel) return;
+  if (!IS_DEV_BUILD) {
+    elements.debugPanel.classList.add("hidden");
+    return;
+  }
+  elements.debugPanel.classList.remove("hidden");
+  const todayIndex = getMelbourneDowMon0();
+  if (elements.debugTodayIndex) {
+    elements.debugTodayIndex.textContent = String(todayIndex);
+  }
+  if (elements.debugTodayLabel) {
+    elements.debugTodayLabel.textContent = mon0ToLabel(todayIndex) || "—";
+  }
+  const counts = debugTodayCounts();
+  if (elements.debugOrdersCount) {
+    elements.debugOrdersCount.textContent = String(counts.orders);
+  }
+  if (elements.debugPacksCount) {
+    elements.debugPacksCount.textContent = String(counts.packs);
+  }
+  if (elements.debugDeliveriesCount) {
+    elements.debugDeliveriesCount.textContent = String(counts.deliveries);
+  }
+  if (elements.debugSampleCustomers) {
+    const samples = state.customers.slice(0, 3);
+    elements.debugSampleCustomers.innerHTML =
+      samples
+        .map((customer) => {
+          const schedule = customer.schedule || {};
+          const deliveryDays = schedule.deliverDays || [];
+          return `
+            <div class="debug-sample">
+              <strong>${customer.storeName || "Unknown"}</strong>
+              <div class="muted">
+                delivery_days: [${deliveryDays.join(", ")}] (${formatDayArrayLabel(deliveryDays)})
+                • today index: ${todayIndex}
+              </div>
+            </div>
+          `;
+        })
+        .join("") || "<p class=\"muted\">No customers loaded.</p>";
+  }
+  if (elements.debugDayCounts) {
+    const { counts: dayCounts, min, max } = dayArrayStats(state.customers);
+    const summary = dayCounts
+      .map((count, index) => `${index} (${mon0ToLabel(index)}): ${count}`)
+      .join(" • ");
+    const bounds = min === null ? "—" : `${min}–${max}`;
+    elements.debugDayCounts.textContent = `Day counts: ${summary} | min/max: ${bounds}`;
+  }
+}
+
+function convertDayValueSun0ToMon0(value) {
+  if (!Number.isFinite(value)) return null;
+  const intValue = Math.trunc(value);
+  if (intValue < 0 || intValue > 6) return null;
+  return (intValue + 6) % 7;
+}
+
+function convertDayArraySun0ToMon0(values = []) {
+  if (!Array.isArray(values)) return [];
+  return normalizeDayArray(values.map((value) => convertDayValueSun0ToMon0(value)));
+}
+
+async function migrateDayIndexesSun0ToMon0() {
+  if (!IS_DEV_BUILD) return;
+  if (!canWrite()) {
+    showOfflineAlert();
+    return;
+  }
+  if (!state.session || !supabaseAvailable) {
+    showSnackbar("Sign in to run the migration.");
+    return;
+  }
+  const confirmation = prompt(
+    "This will migrate day indexes from Sun0 → Mon0 for ALL customers.\n\nType MIGRATE to continue."
+  );
+  if (confirmation !== "MIGRATE") return;
+  if (elements.dayMigrationStatus) {
+    elements.dayMigrationStatus.textContent = "Migrating day arrays…";
+  }
+  const updates = [];
+  try {
+    for (const customer of state.customers) {
+      const schedule = customer.schedule || {};
+      const updatedSchedule = {
+        ...schedule,
+        orderDay1: convertDayValueSun0ToMon0(schedule.orderDay1),
+        packDay1: convertDayValueSun0ToMon0(schedule.packDay1),
+        deliverDay1: convertDayValueSun0ToMon0(schedule.deliverDay1),
+        orderDay2: convertDayValueSun0ToMon0(schedule.orderDay2),
+        packDay2: convertDayValueSun0ToMon0(schedule.packDay2),
+        deliverDay2: convertDayValueSun0ToMon0(schedule.deliverDay2),
+        customerOrderDays: convertDayArraySun0ToMon0(schedule.customerOrderDays),
+        deliverDays: convertDayArraySun0ToMon0(schedule.deliverDays),
+        packDays: convertDayArraySun0ToMon0(schedule.packDays),
+      };
+      const updatedCustomer = { ...customer, schedule: normalizeSchedule(updatedSchedule) };
+      const savedCustomer = await syncUpsertCustomer(updatedCustomer, { mode: "update" });
+      await put("customers", savedCustomer);
+      updates.push(savedCustomer);
+    }
+    state.customers = state.customers.map((customer) => {
+      const updated = updates.find((item) => item.id === customer.id);
+      return updated || customer;
+    });
+    showSnackbar("Day index migration completed.");
+  } catch (error) {
+    console.error("Day index migration failed", error);
+    showSnackbar(error?.message || "Day index migration failed.");
+  } finally {
+    if (elements.dayMigrationStatus) {
+      elements.dayMigrationStatus.textContent = "";
+    }
+    updateDebugPanel();
+    renderAll();
+  }
 }
 
 function helpIcon(text) {
@@ -1500,11 +1659,10 @@ function exportSelectedScheduleItems() {
 }
 
 function startOfWeekMonday(dateKey) {
-  const date = dateKeyToDate(dateKey);
-  const day = date.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  const start = new Date(date);
-  start.setDate(start.getDate() + diff);
+  const day = dayIndexFromDateKey(dateKey);
+  const diff = -day;
+  const start = dateKeyToDate(dateKey);
+  start.setUTCDate(start.getUTCDate() + diff);
   return todayKeyFromDate(start);
 }
 
@@ -2301,18 +2459,13 @@ function computeNextExpected(customer) {
 
 function nextWeeklyDate(dayOfWeek, startKey) {
   if (!dayOfWeek) return addDays(startKey, 7);
-  const map = {
-    Monday: 1,
-    Tuesday: 2,
-    Wednesday: 3,
-    Thursday: 4,
-    Friday: 5,
-    Saturday: 6,
-    Sunday: 0,
-  };
-  const target = map[dayOfWeek] ?? 1;
+  const target =
+    typeof dayOfWeek === "number"
+      ? normalizeDayNumber(dayOfWeek)
+      : labelsToMon0(dayOfWeek);
+  const safeTarget = target ?? 0;
   const current = dayIndexFromDateKey(startKey);
-  let diff = target - current;
+  let diff = safeTarget - current;
   if (diff <= 0) diff += 7;
   return addDays(startKey, diff);
 }
@@ -5255,6 +5408,7 @@ function renderAll() {
   renderSchedule();
   renderBackupStatus();
   renderStickyNotes();
+  updateDebugPanel();
 }
 
 function clearAppState() {
@@ -5374,6 +5528,13 @@ function setupEvents() {
       elements.dbHealthCheckBtn.remove();
     } else {
       on(elements.dbHealthCheckBtn, "click", runCustomerDbHealthCheck);
+    }
+  }
+  if (elements.migrateDayIndexBtn) {
+    if (!IS_DEV_BUILD) {
+      elements.migrateDayIndexBtn.remove();
+    } else {
+      on(elements.migrateDayIndexBtn, "click", migrateDayIndexesSun0ToMon0);
     }
   }
   on(elements.newStickyNoteBtn, "click", () => openStickyNoteModal());

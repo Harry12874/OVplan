@@ -1,4 +1,4 @@
-const MEL_TIMEZONE = "Australia/Melbourne";
+import { MEL_TIMEZONE, getMelbourneDowMon0 } from "./lib/days.js";
 
 const channelLabels = {
   portal: "Portal",
@@ -175,13 +175,7 @@ function detectNumericColumns(headers, rows) {
 
 function dayIndexFromDateKey(dateKey) {
   if (!dateKey) return 0;
-  const formatter = new Intl.DateTimeFormat("en-AU", {
-    timeZone: MEL_TIMEZONE,
-    weekday: "short",
-  });
-  const label = formatter.format(dateKeyToDate(dateKey));
-  const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  return dayNames.indexOf(label);
+  return getMelbourneDowMon0(dateKeyToDate(dateKey));
 }
 
 export {

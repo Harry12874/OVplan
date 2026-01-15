@@ -363,6 +363,32 @@ body {
   margin-top: 0;
 }
 
+.debug-panel {
+  border-style: dashed;
+}
+
+.debug-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.debug-section {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.debug-sample {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.debug-sample:first-child {
+  border-top: none;
+}
+
 .photo-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
