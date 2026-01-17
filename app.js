@@ -1799,7 +1799,6 @@ function getCurrentUserId() {
 const customerSupabaseColumns = new Set([
   "id",
   "user_id",
-  "customer_id",
   "store_name",
   "contact_name",
   "phone",
@@ -1808,17 +1807,14 @@ const customerSupabaseColumns = new Set([
   "suburb",
   "state",
   "postcode",
-  "order_channel",
+  "order_source",
   "delivery_terms",
-  "delivery_notes",
+  "notes",
   "packing_days",
   "delivery_days",
   "order_days",
-  "average_order_value",
   "rep_name",
-  "data_json",
   "extraFields_json",
-  "updated_at",
 ]);
 
 function sanitizeCustomerPayload(raw) {
@@ -1830,6 +1826,29 @@ function sanitizeCustomerPayload(raw) {
   }, {});
 }
 
+function parseExtraFieldsJson(raw) {
+  if (!raw) return {};
+  if (typeof raw === "object") {
+    return Array.isArray(raw) ? {} : raw;
+  }
+  if (typeof raw !== "string") return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function buildExtraFieldsJson(extraFields, extraFieldsJson) {
+  const base = parseExtraFieldsJson(extraFieldsJson);
+  const merged = {
+    ...base,
+    ...(extraFields || {}),
+  };
+  return JSON.stringify(merged);
+}
+
 function resolveCustomerRepName(customer) {
   const repLabel = customer.repName || repName(customer.assignedRepId);
   return repLabel && repLabel !== "Unassigned" ? repLabel : null;
@@ -1838,10 +1857,13 @@ function resolveCustomerRepName(customer) {
 function mapCustomerToSupabase(customer) {
   const schedule = normalizeSchedule(customer.schedule || {});
   const userId = getCurrentUserId();
+  const orderSource = normalizeOrderChannel(
+    customer.orderSource || customer.orderChannel || customer.channelPreference || "portal"
+  );
+  const extraFieldsJson = buildExtraFieldsJson(customer.extraFields, customer.extraFieldsJson);
   const payload = {
     id: customer.id,
     user_id: userId,
-    customer_id: customer.customerId || null,
     store_name: customer.storeName || "",
     address: customer.fullAddress || "",
     suburb: customer.suburb1 || "",
@@ -1850,55 +1872,51 @@ function mapCustomerToSupabase(customer) {
     contact_name: customer.contactName || "",
     phone: customer.phone || "",
     email: customer.email || "",
-    delivery_notes: customer.deliveryNotes || "",
     delivery_terms: customer.deliveryTerms || "",
-    order_channel: customer.orderChannel || "portal",
-    average_order_value: customer.averageOrderValue ?? null,
+    order_source: orderSource,
+    notes: [customer.customerNotes, customer.deliveryNotes].filter(Boolean).join("\n\n").trim(),
     delivery_days: schedule.deliverDays || [],
     packing_days: schedule.packDays || [],
     order_days: schedule.customerOrderDays || [],
     rep_name: resolveCustomerRepName(customer),
-    data_json: {
-      ...customer,
-      schedule,
-      extraFields: customer.extraFields || {},
-    },
+    extraFields_json: extraFieldsJson,
   };
   return sanitizeCustomerPayload(payload);
 }
 
 function mapCustomerFromSupabase(row) {
-  const data = row?.data_json || {};
   const schedule = normalizeSchedule({
-    ...(data.schedule || {}),
-    customerOrderDays: row?.order_days ?? data.schedule?.customerOrderDays,
-    deliverDays: row?.delivery_days ?? data.schedule?.deliverDays,
-    packDays: row?.packing_days ?? data.schedule?.packDays,
+    customerOrderDays: normalizeDayArray(row?.order_days || []),
+    deliverDays: normalizeDayArray(row?.delivery_days || []),
+    packDays: normalizeDayArray(row?.packing_days || []),
   });
-  const repNameValue = row?.rep_name ?? data.repName ?? "";
+  const repNameValue = row?.rep_name ?? "";
   const repIdFromName = repNameValue
     ? state.reps.find((rep) => rep.name.trim().toLowerCase() === repNameValue.trim().toLowerCase())?.id || ""
     : "";
+  const extraFields = parseExtraFieldsJson(row?.extraFields_json);
   return {
-    ...data,
-    id: row?.id || data.id,
-    customerId: row?.customer_id ?? data.customerId ?? data.externalCustomerId ?? "",
-    storeName: row?.store_name ?? data.storeName ?? "",
-    contactName: row?.contact_name ?? data.contactName ?? "",
-    phone: row?.phone ?? data.phone ?? "",
-    email: row?.email ?? data.email ?? "",
-    fullAddress: row?.address ?? data.fullAddress ?? "",
-    suburb1: row?.suburb ?? data.suburb1 ?? data.suburb ?? "",
-    state1: row?.state ?? data.state1 ?? data.state ?? "",
-    postcode1: row?.postcode ?? data.postcode1 ?? data.postcode ?? "",
-    deliveryNotes: row?.delivery_notes ?? data.deliveryNotes ?? "",
-    deliveryTerms: row?.delivery_terms ?? data.deliveryTerms ?? "",
-    assignedRepId: data.assignedRepId ?? repIdFromName,
-    orderChannel: row?.order_channel ?? data.orderChannel ?? data.channelPreference ?? "portal",
-    averageOrderValue: row?.average_order_value ?? data.averageOrderValue ?? null,
-    extraFields: data.extraFields || {},
+    id: row?.id || createCustomerId(),
+    customerId: "",
+    storeName: row?.store_name ?? "",
+    contactName: row?.contact_name ?? "",
+    phone: row?.phone ?? "",
+    email: row?.email ?? "",
+    fullAddress: row?.address ?? "",
+    address1: row?.address ?? "",
+    suburb1: row?.suburb ?? "",
+    state1: row?.state ?? "",
+    postcode1: row?.postcode ?? "",
+    deliveryNotes: "",
+    deliveryTerms: row?.delivery_terms ?? "",
+    assignedRepId: repIdFromName,
+    orderChannel: normalizeOrderChannel(row?.order_source || "portal"),
+    averageOrderValue: null,
+    extraFields,
+    extraFieldsJson: row?.extraFields_json ?? null,
     schedule,
-    repName: repNameValue || data.repName || "",
+    repName: repNameValue || "",
+    customerNotes: row?.notes ?? "",
   };
 }
 
@@ -2027,7 +2045,7 @@ async function syncUpsertCustomer(customer, { mode } = {}) {
   if (mode === "insert") {
     ({ data, error } = await supabase.from("customers").insert(payload).select("*").single());
   } else {
-    const updatePayload = { ...payload, updated_at: toISO() };
+    const updatePayload = { ...payload };
     let query = supabase.from("customers").update(updatePayload).eq("id", customer.id);
     if (userId) {
       query = query.eq("user_id", userId);
@@ -3704,6 +3722,10 @@ async function handleImportRun() {
         setCloudStatus("synced", toISO());
       } catch (error) {
         console.error("Supabase upsert failed", error);
+        const payloadKeys = Array.from(
+          new Set(supabaseBatch.flatMap((item) => Object.keys(mapCustomerToSupabase(item))))
+        );
+        console.error("Supabase customer payload keys", payloadKeys);
         handleSupabaseError(error, { context: "Supabase import failed", alertOnOffline: true });
         return;
       }
@@ -3754,12 +3776,6 @@ const csvHeaderAliases = {
   packingDays: ["packing_days", "schedule_packDays"],
 };
 
-const csvCustomerHeaders = new Set(
-  Object.values(csvHeaderAliases)
-    .flat()
-    .map((header) => normalizeHeader(header))
-);
-
 function normalizeOrderChannel(value) {
   if (!value) return "portal";
   const normalized = String(value).trim().toLowerCase();
@@ -3778,66 +3794,64 @@ function normalizeOrderChannel(value) {
 
 function parseCsvDayArray(value) {
   const isoDays = normaliseDays(value);
-  const mon0Days = isoDays.map((day) => day - 1);
+  const mon0Days = isoDays.map((day) => day - 1).filter((day) => day >= 0 && day <= 4);
   return normalizeDayArray(mon0Days);
 }
 
 function buildCustomerCsvRecords(headers, rows) {
-  const headerMap = headers.reduce((acc, header, index) => {
-    const normalized = normalizeHeader(header);
-    if (normalized) {
-      acc[normalized] = index;
-    }
-    return acc;
-  }, {});
-
-  const getValue = (row, aliases = []) => {
-    const aliasList = Array.isArray(aliases) ? aliases : [aliases];
-    for (const alias of aliasList) {
-      const key = normalizeHeader(alias);
-      if (!key) continue;
-      const columnIndex = headerMap[key];
-      if (columnIndex === undefined) continue;
-      return String(row[columnIndex] ?? "").trim();
-    }
-    return "";
-  };
-
   return rows.map((row, index) => {
-    const storeName = getValue(row, csvHeaderAliases.storeName);
-    const contactName = getValue(row, csvHeaderAliases.contactName);
-    const phone = getValue(row, csvHeaderAliases.phone);
-    const email = getValue(row, csvHeaderAliases.email);
-    const address = getValue(row, csvHeaderAliases.address);
-    const suburb = getValue(row, csvHeaderAliases.suburb);
-    const stateValue = getValue(row, csvHeaderAliases.state);
-    const postcode = getValue(row, csvHeaderAliases.postcode);
-    const orderSource = getValue(row, csvHeaderAliases.orderSource);
-    const deliveryTerms = getValue(row, csvHeaderAliases.deliveryTerms);
-    const deliveryNotes = getValue(row, csvHeaderAliases.deliveryNotes);
-    const customerNotes = getValue(row, csvHeaderAliases.customerNotes);
-    const notes = getValue(row, csvHeaderAliases.notes);
-    const repName = getValue(row, csvHeaderAliases.repName);
-    const packingDays = parseCsvDayArray(getValue(row, csvHeaderAliases.packingDays));
-    const deliveryDays = parseCsvDayArray(getValue(row, csvHeaderAliases.deliveryDays));
-    const orderDays = parseCsvDayArray(getValue(row, csvHeaderAliases.orderDays));
+    const normalizedRow = headers.reduce((acc, header, headerIndex) => {
+      const normalized = normalizeHeader(header);
+      if (!normalized) return acc;
+      acc[normalized] = String(row[headerIndex] ?? "").trim();
+      return acc;
+    }, {});
+    const usedKeys = new Set();
+    const getValue = (aliases = []) => {
+      const aliasList = Array.isArray(aliases) ? aliases : [aliases];
+      for (const alias of aliasList) {
+        const key = normalizeHeader(alias);
+        if (!key) continue;
+        if (key in normalizedRow) {
+          usedKeys.add(key);
+          return normalizedRow[key];
+        }
+      }
+      return "";
+    };
+    const storeName = getValue(csvHeaderAliases.storeName);
+    const contactName = getValue(csvHeaderAliases.contactName);
+    const phone = getValue(csvHeaderAliases.phone);
+    const email = getValue(csvHeaderAliases.email);
+    const address = getValue(csvHeaderAliases.address);
+    const suburb = getValue(csvHeaderAliases.suburb);
+    const stateValue = getValue(csvHeaderAliases.state);
+    const postcode = getValue(csvHeaderAliases.postcode);
+    const orderSource = getValue(csvHeaderAliases.orderSource);
+    const deliveryTerms = getValue(csvHeaderAliases.deliveryTerms);
+    const deliveryNotes = getValue(csvHeaderAliases.deliveryNotes);
+    const customerNotes = getValue(csvHeaderAliases.customerNotes);
+    const notes = getValue(csvHeaderAliases.notes);
+    const repName = getValue(csvHeaderAliases.repName);
+    const packingDays = parseCsvDayArray(getValue(csvHeaderAliases.packingDays));
+    const deliveryDays = parseCsvDayArray(getValue(csvHeaderAliases.deliveryDays));
+    const orderDays = parseCsvDayArray(getValue(csvHeaderAliases.orderDays));
 
     const combinedNotes = [deliveryNotes, customerNotes, notes].filter(Boolean).join("\n\n").trim();
     const addressParts = [address, suburb, stateValue, postcode].filter(Boolean);
     const fullAddress = address || addressParts.join(", ");
 
-    const extraFields = headers.reduce((acc, header, headerIndex) => {
+    const errors = [];
+    const extraFieldsRaw = getValue(csvHeaderAliases.extraFieldsJson);
+    const extraFieldsBase = parseExtraFieldsJson(extraFieldsRaw);
+    const extras = headers.reduce((acc, header, headerIndex) => {
       const normalized = normalizeHeader(header);
-      if (!normalized || csvCustomerHeaders.has(normalized)) return acc;
+      if (!normalized || usedKeys.has(normalized)) return acc;
       acc[header.trim()] = String(row[headerIndex] ?? "").trim();
       return acc;
     }, {});
-
-    const errors = [];
-    const extraFieldsRaw = getValue(row, csvHeaderAliases.extraFieldsJson);
-    if (extraFieldsRaw) {
-      extraFields.extraFields_json = extraFieldsRaw;
-    }
+    const mergedExtraFields = { ...extraFieldsBase, ...extras };
+    const extraFieldsJson = JSON.stringify(mergedExtraFields);
 
     return {
       index,
@@ -3857,7 +3871,8 @@ function buildCustomerCsvRecords(headers, rows) {
       deliveryDays,
       orderDays,
       fullAddress,
-      extraFields,
+      extraFields: mergedExtraFields,
+      extraFieldsJson,
       errors,
     };
   });
@@ -4093,6 +4108,7 @@ async function handleCustomerCsvImport() {
       customerNotes: record.notes || existing?.customerNotes || "",
       schedule: buildScheduleFromCsv(record, existing?.schedule),
       extraFields: { ...(existing?.extraFields || {}), ...(record.extraFields || {}) },
+      extraFieldsJson: record.extraFieldsJson || existing?.extraFieldsJson || null,
     };
 
     try {
@@ -4127,6 +4143,10 @@ async function handleCustomerCsvImport() {
       setCloudStatus("synced", toISO());
     } catch (error) {
       console.error("Supabase upsert failed", error);
+      const payloadKeys = Array.from(
+        new Set(supabaseBatch.flatMap((item) => Object.keys(mapCustomerToSupabase(item))))
+      );
+      console.error("Supabase customer payload keys", payloadKeys);
       handleSupabaseError(error, { context: "Supabase import failed", alertOnOffline: true });
       if (resultsEl) {
         resultsEl.textContent = "Supabase sync failed. Local import completed.";
