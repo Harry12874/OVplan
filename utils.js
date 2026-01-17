@@ -173,6 +173,83 @@ function detectNumericColumns(headers, rows) {
     .filter((item) => numericIndices.has(item.index));
 }
 
+const ISO_DAY_LABELS = {
+  mon: 1,
+  monday: 1,
+  tue: 2,
+  tues: 2,
+  tuesday: 2,
+  wed: 3,
+  weds: 3,
+  wednesday: 3,
+  thu: 4,
+  thur: 4,
+  thurs: 4,
+  thursday: 4,
+  fri: 5,
+  friday: 5,
+  sat: 6,
+  saturday: 6,
+  sun: 7,
+  sunday: 7,
+};
+
+function normaliseDays(input) {
+  if (input === null || input === undefined) return [];
+  let values = [];
+  if (Array.isArray(input)) {
+    values = input;
+  } else if (typeof input === "string") {
+    const trimmed = input.trim();
+    if (!trimmed) return [];
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        values = Array.isArray(parsed) ? parsed : [trimmed];
+      } catch (error) {
+        values = trimmed.split(/[,\s]+/);
+      }
+    } else {
+      values = trimmed.split(/[,\s]+/);
+    }
+  } else {
+    values = [input];
+  }
+
+  const numeric = [];
+  const labels = [];
+  values.forEach((value) => {
+    if (value === null || value === undefined || value === "") return;
+    if (typeof value === "number" && Number.isFinite(value)) {
+      numeric.push(Math.trunc(value));
+      return;
+    }
+    const stringValue = String(value).trim();
+    if (!stringValue) return;
+    const asNumber = Number(stringValue);
+    if (!Number.isNaN(asNumber)) {
+      numeric.push(Math.trunc(asNumber));
+      return;
+    }
+    labels.push(stringValue.toLowerCase());
+  });
+
+  const isoFromLabels = labels
+    .map((label) => ISO_DAY_LABELS[label])
+    .filter((value) => value !== undefined);
+
+  let isoFromNumbers = [];
+  if (numeric.length) {
+    const isSun0 = numeric.every((value) => value >= 0 && value <= 6);
+    isoFromNumbers = numeric
+      .map((value) => (isSun0 ? (value === 0 ? 7 : value) : value))
+      .filter((value) => value >= 1 && value <= 7);
+  }
+
+  const combined = isoFromLabels.concat(isoFromNumbers).filter((value) => value >= 1 && value <= 5);
+  return Array.from(new Set(combined)).sort((a, b) => a - b);
+}
+
 function dayIndexFromDateKey(dateKey) {
   if (!dateKey) return 0;
   return getMelbourneDowMon0(dateKeyToDate(dateKey));
@@ -198,4 +275,5 @@ export {
   normalizeHeader,
   parseCsv,
   detectNumericColumns,
+  normaliseDays,
 };

@@ -234,7 +234,9 @@
                 <p class="muted">Manage customer profiles and schedules.</p>
               </div>
               <div class="actions">
+                <button id="uploadCustomersCsvBtn" class="btn btn-secondary" type="button">Upload CSV</button>
                 <button id="newCustomerBtn" class="btn btn-primary" data-requires-online="true">+ New Customer</button>
+                <input id="uploadCustomersCsvInput" type="file" accept=".csv" class="hidden" />
                 <button id="dbHealthCheckBtn" class="btn btn-secondary" type="button" data-requires-online="true">
                   DB Health Check
                 </button>
@@ -453,6 +455,13 @@
                 <button class="btn btn-secondary tab" data-tab="export">Export Deliveries</button>
                 <button class="btn btn-secondary tab" data-tab="backup">Backup & Restore</button>
               </div>
+            </div>
+            <div class="card">
+              <h3>Data management</h3>
+              <p class="muted">Wipe customers and schedules for this account only. Login remains intact.</p>
+              <button class="btn danger" id="wipeCustomersBtn" type="button" data-requires-online="true">
+                Wipe all customers (this account)
+              </button>
             </div>
             <div id="debugPanel" class="card debug-panel hidden">
               <h3>Day index debug (dev only)</h3>
