@@ -1796,10 +1796,49 @@ function getCurrentUserId() {
   return state.session?.user?.id || null;
 }
 
+const customerSupabaseColumns = new Set([
+  "id",
+  "user_id",
+  "customer_id",
+  "store_name",
+  "contact_name",
+  "phone",
+  "email",
+  "address",
+  "suburb",
+  "state",
+  "postcode",
+  "order_channel",
+  "delivery_terms",
+  "delivery_notes",
+  "packing_days",
+  "delivery_days",
+  "order_days",
+  "average_order_value",
+  "rep_name",
+  "data_json",
+  "extraFields_json",
+  "updated_at",
+]);
+
+function sanitizeCustomerPayload(raw) {
+  return Object.keys(raw).reduce((acc, key) => {
+    if (customerSupabaseColumns.has(key)) {
+      acc[key] = raw[key];
+    }
+    return acc;
+  }, {});
+}
+
+function resolveCustomerRepName(customer) {
+  const repLabel = customer.repName || repName(customer.assignedRepId);
+  return repLabel && repLabel !== "Unassigned" ? repLabel : null;
+}
+
 function mapCustomerToSupabase(customer) {
   const schedule = normalizeSchedule(customer.schedule || {});
   const userId = getCurrentUserId();
-  return {
+  const payload = {
     id: customer.id,
     user_id: userId,
     customer_id: customer.customerId || null,
@@ -1813,18 +1852,19 @@ function mapCustomerToSupabase(customer) {
     email: customer.email || "",
     delivery_notes: customer.deliveryNotes || "",
     delivery_terms: customer.deliveryTerms || "",
-    assigned_rep_id: customer.assignedRepId || null,
     order_channel: customer.orderChannel || "portal",
     average_order_value: customer.averageOrderValue ?? null,
     delivery_days: schedule.deliverDays || [],
     packing_days: schedule.packDays || [],
     order_days: schedule.customerOrderDays || [],
+    rep_name: resolveCustomerRepName(customer),
     data_json: {
       ...customer,
       schedule,
       extraFields: customer.extraFields || {},
     },
   };
+  return sanitizeCustomerPayload(payload);
 }
 
 function mapCustomerFromSupabase(row) {
@@ -1835,6 +1875,10 @@ function mapCustomerFromSupabase(row) {
     deliverDays: row?.delivery_days ?? data.schedule?.deliverDays,
     packDays: row?.packing_days ?? data.schedule?.packDays,
   });
+  const repNameValue = row?.rep_name ?? data.repName ?? "";
+  const repIdFromName = repNameValue
+    ? state.reps.find((rep) => rep.name.trim().toLowerCase() === repNameValue.trim().toLowerCase())?.id || ""
+    : "";
   return {
     ...data,
     id: row?.id || data.id,
@@ -1849,11 +1893,12 @@ function mapCustomerFromSupabase(row) {
     postcode1: row?.postcode ?? data.postcode1 ?? data.postcode ?? "",
     deliveryNotes: row?.delivery_notes ?? data.deliveryNotes ?? "",
     deliveryTerms: row?.delivery_terms ?? data.deliveryTerms ?? "",
-    assignedRepId: row?.assigned_rep_id ?? data.assignedRepId ?? "",
+    assignedRepId: data.assignedRepId ?? repIdFromName,
     orderChannel: row?.order_channel ?? data.orderChannel ?? data.channelPreference ?? "portal",
     averageOrderValue: row?.average_order_value ?? data.averageOrderValue ?? null,
     extraFields: data.extraFields || {},
     schedule,
+    repName: repNameValue || data.repName || "",
   };
 }
 
@@ -4033,6 +4078,7 @@ async function handleCustomerCsvImport() {
       deliveryNotes: existing?.deliveryNotes || "",
       deliveryTerms: record.deliveryTerms || existing?.deliveryTerms || "",
       assignedRepId: assignedRepId || existing?.assignedRepId || "",
+      repName: record.repName || repName(assignedRepId),
       orderChannel: channel,
       orderTermsLabel: orderTermsLabelFromChannel(channel),
       averageOrderValue: existing?.averageOrderValue ?? null,

@@ -63,7 +63,7 @@ Use **Customers → Upload CSV** to import `ov_customers.csv`-style files. The i
 - `packing_days` → `customers.packing_days` / `schedule.packDays`
 - `delivery_days` → `customers.delivery_days` / `schedule.deliverDays`
 - `order_days` → `customers.order_days` / `schedule.customerOrderDays`
-- `rep_name` → `assignedRepId` (matched against rep name)
+- `rep_name` → `customers.rep_name` / `repName` (matched against rep name for default rep selection)
 - `extraFields_json` → `extraFields` (raw JSON string)
 - Unknown columns → merged into `extraFields`
 
