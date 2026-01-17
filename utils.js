@@ -101,10 +101,11 @@ function dateRange(startKey, days) {
 
 function normalizeHeader(header = "") {
   return header
+    .replace(/^\uFEFF/, "")
     .trim()
     .replace(/\*/g, "")
-    .replace(/\s+/g, " ")
-    .toLowerCase();
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
 }
 
 function parseCsv(text) {

@@ -3688,24 +3688,32 @@ function downloadImportReport() {
   URL.revokeObjectURL(url);
 }
 
-const csvCustomerHeaders = new Set([
-  "store_name",
-  "contact_name",
-  "phone",
-  "email",
-  "address",
-  "suburb",
-  "state",
-  "postcode",
-  "order_source",
-  "delivery_terms",
-  "notes",
-  "packing_days",
-  "delivery_days",
-  "order_days",
-  "rep_name",
-  "extrafields_json",
-]);
+const csvHeaderAliases = {
+  storeName: ["store_name", "storename", "store", "storeName"],
+  address: ["fullAddress", "fulladdress", "address", "address1"],
+  suburb: ["suburb", "suburb1"],
+  state: ["state", "state1"],
+  postcode: ["postcode", "postcode1"],
+  contactName: ["contact_name", "contactName", "contactname"],
+  phone: ["phone"],
+  email: ["email"],
+  deliveryTerms: ["delivery_terms", "deliveryTerms", "deliveryterms"],
+  deliveryNotes: ["deliveryNotes", "delivery_notes"],
+  customerNotes: ["customerNotes", "customer_notes"],
+  notes: ["notes"],
+  orderSource: ["order_source", "orderChannel", "orderchannel"],
+  repName: ["rep_name", "assignedRepName", "assignedrepname"],
+  extraFieldsJson: ["extraFields_json"],
+  orderDays: ["order_days", "schedule_customerOrderDays"],
+  deliveryDays: ["delivery_days", "schedule_deliverDays"],
+  packingDays: ["packing_days", "schedule_packDays"],
+};
+
+const csvCustomerHeaders = new Set(
+  Object.values(csvHeaderAliases)
+    .flat()
+    .map((header) => normalizeHeader(header))
+);
 
 function normalizeOrderChannel(value) {
   if (!value) return "portal";
@@ -3738,31 +3746,40 @@ function buildCustomerCsvRecords(headers, rows) {
     return acc;
   }, {});
 
-  return rows.map((row, index) => {
-    const getValue = (key) => {
+  const getValue = (row, aliases = []) => {
+    const aliasList = Array.isArray(aliases) ? aliases : [aliases];
+    for (const alias of aliasList) {
+      const key = normalizeHeader(alias);
+      if (!key) continue;
       const columnIndex = headerMap[key];
-      if (columnIndex === undefined) return "";
+      if (columnIndex === undefined) continue;
       return String(row[columnIndex] ?? "").trim();
-    };
+    }
+    return "";
+  };
 
-    const storeName = getValue("store_name");
-    const contactName = getValue("contact_name");
-    const phone = getValue("phone");
-    const email = getValue("email");
-    const address = getValue("address");
-    const suburb = getValue("suburb");
-    const stateValue = getValue("state");
-    const postcode = getValue("postcode");
-    const orderSource = getValue("order_source");
-    const deliveryTerms = getValue("delivery_terms");
-    const notes = getValue("notes");
-    const repName = getValue("rep_name");
-    const packingDays = parseCsvDayArray(getValue("packing_days"));
-    const deliveryDays = parseCsvDayArray(getValue("delivery_days"));
-    const orderDays = parseCsvDayArray(getValue("order_days"));
+  return rows.map((row, index) => {
+    const storeName = getValue(row, csvHeaderAliases.storeName);
+    const contactName = getValue(row, csvHeaderAliases.contactName);
+    const phone = getValue(row, csvHeaderAliases.phone);
+    const email = getValue(row, csvHeaderAliases.email);
+    const address = getValue(row, csvHeaderAliases.address);
+    const suburb = getValue(row, csvHeaderAliases.suburb);
+    const stateValue = getValue(row, csvHeaderAliases.state);
+    const postcode = getValue(row, csvHeaderAliases.postcode);
+    const orderSource = getValue(row, csvHeaderAliases.orderSource);
+    const deliveryTerms = getValue(row, csvHeaderAliases.deliveryTerms);
+    const deliveryNotes = getValue(row, csvHeaderAliases.deliveryNotes);
+    const customerNotes = getValue(row, csvHeaderAliases.customerNotes);
+    const notes = getValue(row, csvHeaderAliases.notes);
+    const repName = getValue(row, csvHeaderAliases.repName);
+    const packingDays = parseCsvDayArray(getValue(row, csvHeaderAliases.packingDays));
+    const deliveryDays = parseCsvDayArray(getValue(row, csvHeaderAliases.deliveryDays));
+    const orderDays = parseCsvDayArray(getValue(row, csvHeaderAliases.orderDays));
 
+    const combinedNotes = [deliveryNotes, customerNotes, notes].filter(Boolean).join("\n\n").trim();
     const addressParts = [address, suburb, stateValue, postcode].filter(Boolean);
-    const fullAddress = addressParts.join(", ");
+    const fullAddress = address || addressParts.join(", ");
 
     const extraFields = headers.reduce((acc, header, headerIndex) => {
       const normalized = normalizeHeader(header);
@@ -3772,19 +3789,9 @@ function buildCustomerCsvRecords(headers, rows) {
     }, {});
 
     const errors = [];
-    let parsedExtraFields = {};
-    const extraFieldsRaw = getValue("extrafields_json");
+    const extraFieldsRaw = getValue(row, csvHeaderAliases.extraFieldsJson);
     if (extraFieldsRaw) {
-      try {
-        const parsed = JSON.parse(extraFieldsRaw);
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          parsedExtraFields = parsed;
-        } else {
-          errors.push("extraFields_json must be an object.");
-        }
-      } catch (error) {
-        errors.push("extraFields_json is not valid JSON.");
-      }
+      extraFields.extraFields_json = extraFieldsRaw;
     }
 
     return {
@@ -3799,13 +3806,13 @@ function buildCustomerCsvRecords(headers, rows) {
       postcode,
       orderSource,
       deliveryTerms,
-      notes,
+      notes: combinedNotes,
       repName,
       packingDays,
       deliveryDays,
       orderDays,
       fullAddress,
-      extraFields: { ...parsedExtraFields, ...extraFields },
+      extraFields,
       errors,
     };
   });
@@ -3843,6 +3850,7 @@ function renderCustomerCsvModal() {
   const totalRows = customerCsvImportState.records.length;
   const defaultRepId = customerCsvImportState.defaultRepId;
   const previewRows = customerCsvImportState.records.slice(0, 20);
+  const detectedColumns = customerCsvImportState.headers.filter(Boolean).join(", ");
   const errors = [];
 
   customerCsvImportState.records.forEach((record) => {
@@ -3886,6 +3894,7 @@ function renderCustomerCsvModal() {
   showModal(`
     <h2>Upload customers CSV</h2>
     <p class="muted">${customerCsvImportState.fileName || "CSV import"} • ${totalRows} rows detected.</p>
+    <p class="muted">Detected columns: ${detectedColumns || "None"}</p>
     <div class="card">
       <label>Default rep for missing/unknown rep_name
         <select id="csvImportDefaultRep">
@@ -4103,10 +4112,29 @@ async function handleCustomerCsvFileChange() {
     alert("CSV appears to be empty.");
     return;
   }
-  const headers = rows[0].map((header) => header.trim());
+  const headers = rows[0].map((header) => String(header ?? "").replace(/^\uFEFF/, "").trim());
   const normalizedHeaders = headers.map((header) => normalizeHeader(header));
-  if (!normalizedHeaders.includes("store_name") || !normalizedHeaders.includes("address")) {
-    alert("Missing required headers: store_name and address.");
+  const normalizedHeaderSet = new Set(normalizedHeaders);
+  const hasHeaderAlias = (aliases) =>
+    aliases.map((alias) => normalizeHeader(alias)).some((alias) => normalizedHeaderSet.has(alias));
+  const missing = [];
+  if (!hasHeaderAlias(csvHeaderAliases.storeName)) {
+    missing.push({
+      label: "store name",
+      aliases: csvHeaderAliases.storeName,
+    });
+  }
+  if (!hasHeaderAlias(csvHeaderAliases.address)) {
+    missing.push({
+      label: "address",
+      aliases: csvHeaderAliases.address,
+    });
+  }
+  if (missing.length) {
+    const details = missing
+      .map((item) => `${item.label} (aliases: ${item.aliases.join(", ")})`)
+      .join("; ");
+    alert(`Missing required headers: ${details}.`);
     return;
   }
   const dataRows = rows.slice(1);

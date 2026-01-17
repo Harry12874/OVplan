@@ -34,6 +34,20 @@ Use **Customers → Upload CSV** to import `ov_customers.csv`-style files. The i
 - Upserts by email (preferred) or store name + address + postcode.
 - Normalizes day arrays to weekdays only (Mon–Fri).
 
+**Accepted header aliases (case/spacing/underscore-insensitive)**
+- Store name: `store_name`, `storeName`, `storename`, `store`
+- Address: `fullAddress` (preferred), `address`, `address1`
+- Suburb: `suburb`, `suburb1`
+- State: `state`, `state1`
+- Postcode: `postcode`, `postcode1`
+- Contact name: `contact_name`, `contactName`
+- Delivery terms: `delivery_terms`, `deliveryTerms`
+- Order source: `order_source`, `orderChannel`
+- Rep name: `rep_name`, `assignedRepName`
+- Days: `order_days`/`schedule_customerOrderDays`, `packing_days`/`schedule_packDays`, `delivery_days`/`schedule_deliverDays`
+- Notes: `deliveryNotes`, `customerNotes`, `notes`
+- Extra fields JSON: `extraFields_json`
+
 **CSV → DB mapping**
 - `store_name` → `customers.store_name` / `storeName`
 - `contact_name` → `customers.contact_name` / `contactName`
@@ -50,7 +64,7 @@ Use **Customers → Upload CSV** to import `ov_customers.csv`-style files. The i
 - `delivery_days` → `customers.delivery_days` / `schedule.deliverDays`
 - `order_days` → `customers.order_days` / `schedule.customerOrderDays`
 - `rep_name` → `assignedRepId` (matched against rep name)
-- `extraFields_json` → `extraFields` (JSON object)
+- `extraFields_json` → `extraFields` (raw JSON string)
 - Unknown columns → merged into `extraFields`
 
 ## Supabase migrations
