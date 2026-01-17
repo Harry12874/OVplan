@@ -28,6 +28,34 @@ The **Export** tab lets you:
 
 Presets are saved in your browser and can be edited anytime.
 
+## Customer CSV import
+Use **Customers → Upload CSV** to import `ov_customers.csv`-style files. The importer:
+- Previews the first 20 rows with validation errors.
+- Upserts by email (preferred) or store name + address + postcode.
+- Normalizes day arrays to weekdays only (Mon–Fri).
+
+**CSV → DB mapping**
+- `store_name` → `customers.store_name` / `storeName`
+- `contact_name` → `customers.contact_name` / `contactName`
+- `phone` → `customers.phone` / `phone`
+- `email` → `customers.email` / `email`
+- `address` → `customers.address` / `fullAddress` + `address1`
+- `suburb` → `customers.suburb` / `suburb1`
+- `state` → `customers.state` / `state1`
+- `postcode` → `customers.postcode` / `postcode1`
+- `order_source` → `customers.order_channel` / `orderChannel`
+- `delivery_terms` → `customers.delivery_terms` / `deliveryTerms`
+- `notes` → `customerNotes`
+- `packing_days` → `customers.packing_days` / `schedule.packDays`
+- `delivery_days` → `customers.delivery_days` / `schedule.deliverDays`
+- `order_days` → `customers.order_days` / `schedule.customerOrderDays`
+- `rep_name` → `assignedRepId` (matched against rep name)
+- `extraFields_json` → `extraFields` (JSON object)
+- Unknown columns → merged into `extraFields`
+
+## Supabase migrations
+Run `supabase/customer_data_scope.sql` in the Supabase SQL editor to add `user_id`, RLS policies, and customer scoping.
+
 ## Sample data
 Use **Load sample data** to populate demo reps, customers, and orders.
 

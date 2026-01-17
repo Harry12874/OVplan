@@ -22,6 +22,7 @@ import {
   normalizeHeader,
   parseCsv,
   detectNumericColumns,
+  normaliseDays,
 } from "./utils.js";
 import {
   defaultColumns,
@@ -54,6 +55,8 @@ const IS_DEV_BUILD =
   BUILD_ID === "dev" || location.hostname === "localhost" || location.hostname === "127.0.0.1";
 
 const dayNames = Array.from({ length: 7 }, (_, index) => mon0ToLabel(index));
+const weekdayIndices = [0, 1, 2, 3, 4];
+const weekdayNames = weekdayIndices.map((index) => dayNames[index]);
 
 const state = {
   reps: [],
@@ -183,6 +186,8 @@ function loadElements() {
     stickyNotesSections: document.getElementById("stickyNotesSections"),
     newOrderBtn: document.getElementById("newOrderBtn"),
     newCustomerBtn: document.getElementById("newCustomerBtn"),
+    uploadCustomersCsvBtn: document.getElementById("uploadCustomersCsvBtn"),
+    uploadCustomersCsvInput: document.getElementById("uploadCustomersCsvInput"),
     dbHealthCheckBtn: document.getElementById("dbHealthCheckBtn"),
     newRepBtn: document.getElementById("newRepBtn"),
     sampleDataBtn: document.getElementById("sampleDataBtn"),
@@ -195,6 +200,7 @@ function loadElements() {
     snackbarUndo: document.getElementById("snackbarUndo"),
     accountEmail: document.getElementById("accountEmail"),
     accountLogoutBtn: document.getElementById("accountLogoutBtn"),
+    wipeCustomersBtn: document.getElementById("wipeCustomersBtn"),
     debugPanel: document.getElementById("debugPanel"),
     debugTodayIndex: document.getElementById("debugTodayIndex"),
     debugTodayLabel: document.getElementById("debugTodayLabel"),
@@ -419,6 +425,25 @@ function normalizeDayNumber(value) {
   return null;
 }
 
+function isWeekdayIndex(value) {
+  return Number.isInteger(value) && value >= 0 && value <= 4;
+}
+
+function normalizeWeekdayValue(value) {
+  const normalized = normalizeDayValue(value);
+  if (normalized === null || normalized === undefined) return null;
+  return isWeekdayIndex(normalized) ? normalized : null;
+}
+
+function nextWeekdayIndex(value) {
+  if (!Number.isInteger(value)) return null;
+  let next = (value + 1) % 7;
+  while (!isWeekdayIndex(next)) {
+    next = (next + 1) % 7;
+  }
+  return next;
+}
+
 function normalizeDayValue(value) {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value === "number") return normalizeDayNumber(value);
@@ -436,7 +461,7 @@ function normalizeDayArray(values = []) {
   if (!Array.isArray(values)) return [];
   const normalized = values
     .map(normalizeDayValue)
-    .filter((value) => value !== null && value >= 0 && value <= 6);
+    .filter((value) => value !== null && isWeekdayIndex(value));
   const unique = Array.from(new Set(normalized));
   unique.sort((a, b) => a - b);
   return unique;
@@ -446,6 +471,12 @@ function normalizeSchedule(schedule = {}) {
   const base = { ...defaultSchedule(), ...schedule };
   return {
     ...base,
+    orderDay1: normalizeWeekdayValue(base.orderDay1),
+    deliverDay1: normalizeWeekdayValue(base.deliverDay1),
+    packDay1: normalizeWeekdayValue(base.packDay1),
+    orderDay2: normalizeWeekdayValue(base.orderDay2),
+    deliverDay2: normalizeWeekdayValue(base.deliverDay2),
+    packDay2: normalizeWeekdayValue(base.packDay2),
     customerOrderDays: normalizeDayArray(base.customerOrderDays),
     deliverDays: normalizeDayArray(base.deliverDays),
     packDays: normalizeDayArray(base.packDays),
@@ -455,13 +486,13 @@ function normalizeSchedule(schedule = {}) {
 function isValidDayArray(values = []) {
   return (
     Array.isArray(values) &&
-    values.every((value) => Number.isInteger(value) && value >= 0 && value <= 6)
+    values.every((value) => Number.isInteger(value) && isWeekdayIndex(value))
   );
 }
 
 function formatDayArrayLabel(values = []) {
   if (!Array.isArray(values) || !values.length) return "—";
-  const labels = values.map((day) => mon0ToLabel(day)).filter(Boolean);
+  const labels = values.filter((day) => isWeekdayIndex(day)).map((day) => mon0ToLabel(day)).filter(Boolean);
   return labels.length ? labels.join(", ") : "—";
 }
 
@@ -474,7 +505,7 @@ function dayArrayStats(customers = []) {
     [schedule.deliverDays, schedule.packDays, schedule.customerOrderDays].forEach((values) => {
       if (!Array.isArray(values)) return;
       values.forEach((value) => {
-        if (!Number.isInteger(value) || value < 0 || value > 6) return;
+        if (!isWeekdayIndex(value)) return;
         counts[value] += 1;
         min = min === null ? value : Math.min(min, value);
         max = max === null ? value : Math.max(max, value);
@@ -633,14 +664,24 @@ function helpIcon(text) {
 function buildDayButtons(selectedDays = [], role) {
   return `
     <div class="day-buttons" data-day-role="${role}">
-      ${dayNames
+      ${weekdayNames
         .map((label, index) => {
-          const selected = selectedDays.includes(index) ? "selected" : "";
-          return `<button type="button" class="day-button ${selected}" data-day="${index}">${label}</button>`;
+          const dayIndex = weekdayIndices[index];
+          const selected = selectedDays.includes(dayIndex) ? "selected" : "";
+          return `<button type="button" class="day-button ${selected}" data-day="${dayIndex}">${label}</button>`;
         })
         .join("")}
     </div>
   `;
+}
+
+function buildWeekdayOptions(selectedValue) {
+  return weekdayIndices
+    .map((index) => {
+      const label = dayNames[index];
+      return `<option value="${index}" ${Number(selectedValue) === index ? "selected" : ""}>${label}</option>`;
+    })
+    .join("");
 }
 
 const importState = {
@@ -649,6 +690,15 @@ const importState = {
   mapped: [],
   reportCsv: "",
   headerMap: null,
+};
+
+const customerCsvImportState = {
+  fileName: "",
+  headers: [],
+  rows: [],
+  records: [],
+  report: [],
+  defaultRepId: "",
 };
 
 let lastUndo = null;
@@ -1369,6 +1419,7 @@ function buildScheduleItems(startKey, endKey) {
 
   keys.forEach((dateKey) => {
     const dayIndex = dayIndexFromDateKey(dateKey);
+    if (!isWeekdayIndex(dayIndex)) return;
     state.customers.forEach((customer) => {
       const schedule = customer.schedule;
       if (!schedule?.mode || !schedule.frequency) return;
@@ -1424,7 +1475,8 @@ function buildScheduleItems(startKey, endKey) {
           }
 
           const deliverDay =
-            run.deliverDay ?? (run.orderDay !== null && run.orderDay !== undefined ? (run.orderDay + 1) % 7 : null);
+            run.deliverDay ??
+            (run.orderDay !== null && run.orderDay !== undefined ? nextWeekdayIndex(run.orderDay) : null);
           if (deliverDay !== null && deliverDay !== undefined && dayIndex === deliverDay) {
             addItem({
               id: uuid(),
@@ -1479,7 +1531,9 @@ function buildScheduleItems(startKey, endKey) {
         const deliverDays =
           schedule.deliverDays && schedule.deliverDays.length
             ? schedule.deliverDays
-            : schedule.customerOrderDays.map((orderDay) => (orderDay + 1) % 7);
+            : schedule.customerOrderDays
+                .map((orderDay) => nextWeekdayIndex(orderDay))
+                .filter((orderDay) => orderDay !== null && orderDay !== undefined);
         if (deliverDays?.includes(dayIndex)) {
           addItem({
             id: uuid(),
@@ -1532,6 +1586,7 @@ function buildAgendaItems({ dateStart, dateEnd, toggles, statusFilter, repFilter
   );
 
   const filtered = items
+    .filter((item) => isWeekdayIndex(dayIndexFromDateKey(item.date)))
     .map((item) => {
       const event = eventMap.get(scheduleEventKeyForItem(item));
       const status = event?.status || "PENDING";
@@ -1737,10 +1792,16 @@ function formatRangeLabel(viewMode, anchorDate) {
   return `${startLabel}–${endLabel}`;
 }
 
+function getCurrentUserId() {
+  return state.session?.user?.id || null;
+}
+
 function mapCustomerToSupabase(customer) {
   const schedule = normalizeSchedule(customer.schedule || {});
+  const userId = getCurrentUserId();
   return {
     id: customer.id,
+    user_id: userId,
     customer_id: customer.customerId || null,
     store_name: customer.storeName || "",
     address: customer.fullAddress || "",
@@ -1758,6 +1819,11 @@ function mapCustomerToSupabase(customer) {
     delivery_days: schedule.deliverDays || [],
     packing_days: schedule.packDays || [],
     order_days: schedule.customerOrderDays || [],
+    data_json: {
+      ...customer,
+      schedule,
+      extraFields: customer.extraFields || {},
+    },
   };
 }
 
@@ -1792,8 +1858,11 @@ function mapCustomerFromSupabase(row) {
 }
 
 function mapScheduleEventToSupabase(event) {
+  const userId = getCurrentUserId();
   return {
     id: event.id,
+    user_id: userId,
+    customer_id: event.customerId || null,
     data_json: event,
     updated_at: toISO(),
   };
@@ -1854,11 +1923,12 @@ async function loadFromSupabase() {
     const { data: customersData, error: customersError } = await supabase
       .from("customers")
       .select("*")
-      .eq("owner_id", state.session.user.id);
+      .eq("user_id", state.session.user.id);
     if (customersError) throw customersError;
     const { data: eventsData, error: eventsError } = await supabase
       .from("schedule_events")
-      .select("id,data_json");
+      .select("id,data_json")
+      .eq("user_id", state.session.user.id);
     if (eventsError) throw eventsError;
     const { data: notesData, error: notesError } = await supabase
       .from("sticky_notes")
@@ -1915,7 +1985,7 @@ async function syncUpsertCustomer(customer, { mode } = {}) {
     const updatePayload = { ...payload, updated_at: toISO() };
     let query = supabase.from("customers").update(updatePayload).eq("id", customer.id);
     if (userId) {
-      query = query.eq("owner_id", userId);
+      query = query.eq("user_id", userId);
     }
     ({ data, error } = await query.select("*").single());
   }
@@ -1937,7 +2007,7 @@ async function runCustomerDbHealthCheck() {
       .select("id,store_name,delivery_days,packing_days,order_days")
       .limit(5);
     if (state.session?.user?.id) {
-      query = query.eq("owner_id", state.session.user.id);
+      query = query.eq("user_id", state.session.user.id);
     }
     const { data, error } = await query;
     if (error) throw error;
@@ -1974,7 +2044,12 @@ async function syncUpsertScheduleEvent(event) {
 
 async function syncDeleteScheduleEvent(eventId) {
   setCloudStatus("syncing");
-  const { error } = await supabase.from("schedule_events").delete().eq("id", eventId);
+  let query = supabase.from("schedule_events").delete().eq("id", eventId);
+  const userId = getCurrentUserId();
+  if (userId) {
+    query = query.eq("user_id", userId);
+  }
+  const { error } = await query;
   if (error) throw error;
 }
 
@@ -1988,7 +2063,7 @@ async function syncDeleteCustomer(customerId) {
   setCloudStatus("syncing");
   let query = supabase.from("customers").delete().eq("id", customerId);
   if (state.session?.user?.id) {
-    query = query.eq("owner_id", state.session.user.id);
+    query = query.eq("user_id", state.session.user.id);
   }
   const { error } = await query;
   if (error) throw error;
@@ -2384,7 +2459,7 @@ function renderCustomers() {
       </button>
     `;
     })
-    .join("") || "<p class=\"muted\">No customers yet.</p>";
+    .join("") || "<p class=\"muted\">No customers yet. Upload a CSV or add a customer.</p>";
 
   elements.customersList.querySelectorAll("button[data-customer-id]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -2461,8 +2536,8 @@ function nextWeeklyDate(dayOfWeek, startKey) {
   if (!dayOfWeek) return addDays(startKey, 7);
   const target =
     typeof dayOfWeek === "number"
-      ? normalizeDayNumber(dayOfWeek)
-      : labelsToMon0(dayOfWeek);
+      ? normalizeWeekdayValue(dayOfWeek)
+      : normalizeWeekdayValue(dayOfWeek);
   const safeTarget = target ?? 0;
   const current = dayIndexFromDateKey(startKey);
   let diff = safeTarget - current;
@@ -3050,6 +3125,10 @@ function openOneOffModal() {
       alert("Please choose a date.");
       return;
     }
+    if (!isWeekdayIndex(dayIndexFromDateKey(date))) {
+      alert("Weekend dates are not allowed. Please choose a weekday.");
+      return;
+    }
     const record = {
       id: uuid(),
       kind,
@@ -3607,6 +3686,514 @@ function downloadImportReport() {
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+const csvCustomerHeaders = new Set([
+  "store_name",
+  "contact_name",
+  "phone",
+  "email",
+  "address",
+  "suburb",
+  "state",
+  "postcode",
+  "order_source",
+  "delivery_terms",
+  "notes",
+  "packing_days",
+  "delivery_days",
+  "order_days",
+  "rep_name",
+  "extrafields_json",
+]);
+
+function normalizeOrderChannel(value) {
+  if (!value) return "portal";
+  const normalized = String(value).trim().toLowerCase();
+  const map = {
+    portal: "portal",
+    sms: "sms",
+    email: "email",
+    phone: "phone",
+    "rep in person": "rep_in_person",
+    "rep-in-person": "rep_in_person",
+    rep_in_person: "rep_in_person",
+    rep: "rep_in_person",
+  };
+  return map[normalized] || "portal";
+}
+
+function parseCsvDayArray(value) {
+  const isoDays = normaliseDays(value);
+  const mon0Days = isoDays.map((day) => day - 1);
+  return normalizeDayArray(mon0Days);
+}
+
+function buildCustomerCsvRecords(headers, rows) {
+  const headerMap = headers.reduce((acc, header, index) => {
+    const normalized = normalizeHeader(header);
+    if (normalized) {
+      acc[normalized] = index;
+    }
+    return acc;
+  }, {});
+
+  return rows.map((row, index) => {
+    const getValue = (key) => {
+      const columnIndex = headerMap[key];
+      if (columnIndex === undefined) return "";
+      return String(row[columnIndex] ?? "").trim();
+    };
+
+    const storeName = getValue("store_name");
+    const contactName = getValue("contact_name");
+    const phone = getValue("phone");
+    const email = getValue("email");
+    const address = getValue("address");
+    const suburb = getValue("suburb");
+    const stateValue = getValue("state");
+    const postcode = getValue("postcode");
+    const orderSource = getValue("order_source");
+    const deliveryTerms = getValue("delivery_terms");
+    const notes = getValue("notes");
+    const repName = getValue("rep_name");
+    const packingDays = parseCsvDayArray(getValue("packing_days"));
+    const deliveryDays = parseCsvDayArray(getValue("delivery_days"));
+    const orderDays = parseCsvDayArray(getValue("order_days"));
+
+    const addressParts = [address, suburb, stateValue, postcode].filter(Boolean);
+    const fullAddress = addressParts.join(", ");
+
+    const extraFields = headers.reduce((acc, header, headerIndex) => {
+      const normalized = normalizeHeader(header);
+      if (!normalized || csvCustomerHeaders.has(normalized)) return acc;
+      acc[header.trim()] = String(row[headerIndex] ?? "").trim();
+      return acc;
+    }, {});
+
+    const errors = [];
+    let parsedExtraFields = {};
+    const extraFieldsRaw = getValue("extrafields_json");
+    if (extraFieldsRaw) {
+      try {
+        const parsed = JSON.parse(extraFieldsRaw);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          parsedExtraFields = parsed;
+        } else {
+          errors.push("extraFields_json must be an object.");
+        }
+      } catch (error) {
+        errors.push("extraFields_json is not valid JSON.");
+      }
+    }
+
+    return {
+      index,
+      storeName,
+      contactName,
+      phone,
+      email,
+      address,
+      suburb,
+      state: stateValue,
+      postcode,
+      orderSource,
+      deliveryTerms,
+      notes,
+      repName,
+      packingDays,
+      deliveryDays,
+      orderDays,
+      fullAddress,
+      extraFields: { ...parsedExtraFields, ...extraFields },
+      errors,
+    };
+  });
+}
+
+function resolveCsvRepId(record, defaultRepId) {
+  if (record.repName) {
+    const normalized = record.repName.trim().toLowerCase();
+    const rep = state.reps.find((item) => item.name.trim().toLowerCase() === normalized);
+    if (rep) return rep.id;
+  }
+  return defaultRepId || "";
+}
+
+function getCsvRecordErrors(record, defaultRepId) {
+  const errors = [...record.errors];
+  if (!record.storeName) {
+    errors.push("Missing store_name.");
+  }
+  if (!record.fullAddress) {
+    errors.push("Missing address/suburb/state/postcode.");
+  }
+  const repId = resolveCsvRepId(record, defaultRepId);
+  if (!repId) {
+    errors.push("Missing rep_name and no default rep selected.");
+  }
+  return errors;
+}
+
+function formatCsvDayLabel(values = []) {
+  return formatDayArrayLabel(values);
+}
+
+function renderCustomerCsvModal() {
+  const totalRows = customerCsvImportState.records.length;
+  const defaultRepId = customerCsvImportState.defaultRepId;
+  const previewRows = customerCsvImportState.records.slice(0, 20);
+  const errors = [];
+
+  customerCsvImportState.records.forEach((record) => {
+    const recordErrors = getCsvRecordErrors(record, defaultRepId);
+    if (recordErrors.length) {
+      errors.push({ index: record.index, errors: recordErrors });
+    }
+  });
+
+  const errorList = errors
+    .slice(0, 20)
+    .map((item) => `<li>Row ${item.index + 1}: ${item.errors.join(" ")}</li>`)
+    .join("");
+  const errorNote = errors.length > 20 ? `<p class="muted">Showing first 20 errors.</p>` : "";
+
+  const repOptions = getRepOptions(false)
+    .map(
+      (rep) => `<option value="${rep.id}" ${rep.id === defaultRepId ? "selected" : ""}>${rep.name}</option>`
+    )
+    .join("");
+
+  const tableRows = previewRows
+    .map((record) => {
+      const recordErrors = getCsvRecordErrors(record, defaultRepId);
+      const status = recordErrors.length ? "Needs attention" : "Ready";
+      return `
+        <tr>
+          <td>${record.index + 1}</td>
+          <td>${record.storeName || "—"}</td>
+          <td>${record.fullAddress || "—"}</td>
+          <td>${record.email || "—"}</td>
+          <td>${formatCsvDayLabel(record.orderDays)}</td>
+          <td>${formatCsvDayLabel(record.packingDays)}</td>
+          <td>${formatCsvDayLabel(record.deliveryDays)}</td>
+          <td><span class="status-badge ${recordErrors.length ? "" : "ok"}">${status}</span></td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  showModal(`
+    <h2>Upload customers CSV</h2>
+    <p class="muted">${customerCsvImportState.fileName || "CSV import"} • ${totalRows} rows detected.</p>
+    <div class="card">
+      <label>Default rep for missing/unknown rep_name
+        <select id="csvImportDefaultRep">
+          <option value="">Select rep</option>
+          ${repOptions}
+        </select>
+      </label>
+    </div>
+    <div class="card">
+      <h3>Preview (first 20 rows)</h3>
+      <table class="preview-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Store name</th>
+            <th>Address</th>
+            <th>Email</th>
+            <th>Order days</th>
+            <th>Pack days</th>
+            <th>Delivery days</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h3>Errors</h3>
+      ${
+        errorList
+          ? `<ul class="muted">${errorList}</ul>${errorNote}`
+          : "<p class=\"muted\">No errors in preview.</p>"
+      }
+      <div id="csvImportResults" class="muted"></div>
+    </div>
+    <div class="form-actions">
+      <button class="secondary" type="button" id="csvImportCancel">Cancel</button>
+      <button class="primary" type="button" id="csvImportRunBtn" data-requires-online="true">Import</button>
+    </div>
+  `);
+
+  const defaultRepSelect = document.getElementById("csvImportDefaultRep");
+  if (defaultRepSelect) {
+    defaultRepSelect.addEventListener("change", () => {
+      customerCsvImportState.defaultRepId = defaultRepSelect.value;
+      renderCustomerCsvModal();
+    });
+  }
+  const cancelBtn = document.getElementById("csvImportCancel");
+  if (cancelBtn) {
+    cancelBtn.addEventListener("click", closeModal);
+  }
+  const importBtn = document.getElementById("csvImportRunBtn");
+  if (importBtn) {
+    importBtn.addEventListener("click", handleCustomerCsvImport);
+  }
+}
+
+function findExistingCustomerForCsv(record) {
+  const email = record.email?.trim().toLowerCase();
+  if (email) {
+    const matchByEmail = state.customers.find(
+      (customer) => customer.email && customer.email.trim().toLowerCase() === email
+    );
+    if (matchByEmail) return matchByEmail;
+  }
+  const storeName = record.storeName?.trim().toLowerCase();
+  const address = record.fullAddress?.trim().toLowerCase();
+  const postcode = record.postcode?.trim().toLowerCase();
+  if (!storeName || !address || !postcode) return null;
+  return state.customers.find((customer) => {
+    const existingStore = customer.storeName?.trim().toLowerCase();
+    const existingAddress = customer.fullAddress?.trim().toLowerCase();
+    const existingPostcode = customer.postcode1?.trim().toLowerCase();
+    return existingStore === storeName && existingAddress === address && existingPostcode === postcode;
+  });
+}
+
+function buildScheduleFromCsv(record, existingSchedule = {}) {
+  const hasOrderDays = record.orderDays && record.orderDays.length;
+  const baseSchedule = normalizeSchedule(existingSchedule || {});
+  const nextSchedule = {
+    ...baseSchedule,
+    mode: hasOrderDays ? "THEY_PUT_ORDER" : baseSchedule.mode,
+    frequency: hasOrderDays ? "WEEKLY" : baseSchedule.frequency,
+    customerOrderDays: record.orderDays.length ? record.orderDays : baseSchedule.customerOrderDays,
+    packDays: record.packingDays.length ? record.packingDays : baseSchedule.packDays,
+    deliverDays: record.deliveryDays.length ? record.deliveryDays : baseSchedule.deliverDays,
+  };
+  return normalizeSchedule(nextSchedule);
+}
+
+async function handleCustomerCsvImport() {
+  if (!canWrite()) {
+    showOfflineAlert();
+    return;
+  }
+  if (!customerCsvImportState.records.length) {
+    alert("No CSV rows loaded.");
+    return;
+  }
+  const defaultRepId = customerCsvImportState.defaultRepId;
+  const resultsEl = document.getElementById("csvImportResults");
+  if (resultsEl) {
+    resultsEl.textContent = "Importing customers…";
+  }
+  let created = 0;
+  let updated = 0;
+  let failed = 0;
+  const report = [];
+  const supabaseBatch = [];
+
+  for (const record of customerCsvImportState.records) {
+    const recordErrors = getCsvRecordErrors(record, defaultRepId);
+    if (recordErrors.length) {
+      failed += 1;
+      report.push({ index: record.index, storeName: record.storeName, errors: recordErrors });
+      continue;
+    }
+
+    const assignedRepId = resolveCsvRepId(record, defaultRepId);
+    const existing = findExistingCustomerForCsv(record);
+    const channel = normalizeOrderChannel(record.orderSource || existing?.orderChannel || "portal");
+    const payload = {
+      id: existing ? existing.id : createCustomerId(),
+      customerId: existing?.customerId || "",
+      storeName: record.storeName || existing?.storeName || "Unnamed",
+      contactName: record.contactName || existing?.contactName || "",
+      phone: record.phone || existing?.phone || "",
+      email: record.email || existing?.email || "",
+      fullAddress: record.fullAddress || existing?.fullAddress || "",
+      address1: record.address || existing?.address1 || "",
+      suburb1: record.suburb || existing?.suburb1 || "",
+      state1: record.state || existing?.state1 || "",
+      postcode1: record.postcode || existing?.postcode1 || "",
+      deliveryNotes: existing?.deliveryNotes || "",
+      deliveryTerms: record.deliveryTerms || existing?.deliveryTerms || "",
+      assignedRepId: assignedRepId || existing?.assignedRepId || "",
+      orderChannel: channel,
+      orderTermsLabel: orderTermsLabelFromChannel(channel),
+      averageOrderValue: existing?.averageOrderValue ?? null,
+      packOffsetDays: existing?.packOffsetDays ?? 0,
+      deliveryOffsetDays: existing?.deliveryOffsetDays ?? 1,
+      cadenceType: existing?.cadenceType ?? null,
+      cadenceDayOfWeek: existing?.cadenceDayOfWeek || "Monday",
+      cadenceDaysOfWeek: existing?.cadenceDaysOfWeek || [],
+      cadenceEveryNDays: existing?.cadenceEveryNDays || null,
+      cadenceNextDueDate: existing?.cadenceNextDueDate || null,
+      autoAdvanceCadence: existing?.autoAdvanceCadence || false,
+      customerNotes: record.notes || existing?.customerNotes || "",
+      schedule: buildScheduleFromCsv(record, existing?.schedule),
+      extraFields: { ...(existing?.extraFields || {}), ...(record.extraFields || {}) },
+    };
+
+    try {
+      await put("customers", payload);
+    } catch (error) {
+      console.error("IndexedDB write failed", error);
+      failed += 1;
+      report.push({ index: record.index, storeName: record.storeName, errors: ["Local save failed."] });
+      continue;
+    }
+
+    supabaseBatch.push(payload);
+    if (existing) {
+      updated += 1;
+      state.customers = state.customers.map((item) => (item.id === payload.id ? payload : item));
+    } else {
+      created += 1;
+      state.customers.push(payload);
+    }
+  }
+
+  if (supabaseBatch.length) {
+    try {
+      await syncUpsertBatch("customers", supabaseBatch, mapCustomerToSupabase, {
+        onProgress: (done, total) => {
+          if (resultsEl) {
+            resultsEl.textContent = `Syncing ${done}/${total} customers…`;
+          }
+        },
+      });
+      updateConnectionStatus({ status: "Online/Synced", canWrite: true });
+      setCloudStatus("synced", toISO());
+    } catch (error) {
+      console.error("Supabase upsert failed", error);
+      handleSupabaseError(error, { context: "Supabase import failed", alertOnOffline: true });
+      if (resultsEl) {
+        resultsEl.textContent = "Supabase sync failed. Local import completed.";
+      }
+      return;
+    }
+  }
+
+  customerCsvImportState.report = report;
+  if (resultsEl) {
+    const reportText = report.length
+      ? `Failed rows: ${report.length}. ${report
+          .slice(0, 5)
+          .map((item) => `Row ${item.index + 1}`)
+          .join(", ")}${report.length > 5 ? "…" : ""}`
+      : "No failed rows.";
+    resultsEl.textContent = `Imported ${created + updated} customers (${created} created, ${updated} updated). ${reportText}`;
+  }
+  showSnackbar(`Imported ${created + updated} customers (${updated} updated, ${created} created).`);
+  renderAll();
+}
+
+async function handleCustomerCsvFileChange() {
+  const file = elements.uploadCustomersCsvInput?.files?.[0];
+  if (!file) return;
+  const text = await file.text();
+  const rows = parseCsv(text);
+  if (rows.length < 2) {
+    alert("CSV appears to be empty.");
+    return;
+  }
+  const headers = rows[0].map((header) => header.trim());
+  const normalizedHeaders = headers.map((header) => normalizeHeader(header));
+  if (!normalizedHeaders.includes("store_name") || !normalizedHeaders.includes("address")) {
+    alert("Missing required headers: store_name and address.");
+    return;
+  }
+  const dataRows = rows.slice(1);
+  customerCsvImportState.fileName = file.name;
+  customerCsvImportState.headers = headers;
+  customerCsvImportState.rows = dataRows;
+  customerCsvImportState.records = buildCustomerCsvRecords(headers, dataRows);
+  if (!customerCsvImportState.defaultRepId && state.reps.length === 1) {
+    customerCsvImportState.defaultRepId = state.reps[0].id;
+  }
+  renderCustomerCsvModal();
+  if (elements.uploadCustomersCsvInput) {
+    elements.uploadCustomersCsvInput.value = "";
+  }
+}
+
+function openWipeCustomersModal() {
+  if (!state.session || !supabaseAvailable) {
+    showSnackbar("Sign in to wipe customer data.");
+    return;
+  }
+  if (!canWrite()) {
+    showOfflineAlert();
+    return;
+  }
+  const customerCount = state.customers.length;
+  const eventCount = state.scheduleEvents.length;
+  showModal(`
+    <h2>Wipe customer data</h2>
+    <p class="muted">This will permanently delete ${customerCount} customers and ${eventCount} schedule events for this account.</p>
+    <p class="muted">Type <strong>WIPE</strong> to confirm.</p>
+    <label>Confirmation
+      <input id="wipeConfirmInput" placeholder="WIPE" />
+    </label>
+    <div id="wipeStatus" class="muted"></div>
+    <div class="form-actions">
+      <button class="secondary" type="button" id="wipeCancelBtn">Cancel</button>
+      <button class="btn danger" type="button" id="wipeConfirmBtn">Wipe data</button>
+    </div>
+  `);
+
+  const cancelBtn = document.getElementById("wipeCancelBtn");
+  const confirmBtn = document.getElementById("wipeConfirmBtn");
+  const statusEl = document.getElementById("wipeStatus");
+
+  if (cancelBtn) {
+    cancelBtn.addEventListener("click", closeModal);
+  }
+  if (confirmBtn) {
+    confirmBtn.addEventListener("click", async () => {
+      const input = document.getElementById("wipeConfirmInput")?.value?.trim();
+      if (input !== "WIPE") {
+        alert("Type WIPE to confirm.");
+        return;
+      }
+      const userId = getCurrentUserId();
+      if (!userId) {
+        showSnackbar("Not logged in.");
+        return;
+      }
+      if (statusEl) statusEl.textContent = "Deleting data…";
+      confirmBtn.disabled = true;
+      try {
+        const { error: eventsError } = await supabase.from("schedule_events").delete().eq("user_id", userId);
+        if (eventsError) throw eventsError;
+        const { error: customersError } = await supabase.from("customers").delete().eq("user_id", userId);
+        if (customersError) throw customersError;
+        await clearStore("schedule_events");
+        await clearStore("customers");
+        await clearStore("orders");
+        await clearStore("tasks");
+        await clearStore("one_off_items");
+        state.scheduleEvents = [];
+        state.customers = [];
+        state.orders = [];
+        state.tasks = [];
+        state.oneOffItems = [];
+        renderAll();
+        closeModal();
+        showSnackbar("Customer data wiped.");
+      } catch (error) {
+        console.error("Failed to wipe customer data", error);
+        if (statusEl) statusEl.textContent = "Wipe failed. Try again when online.";
+        confirmBtn.disabled = false;
+      }
+    });
+  }
 }
 
 function openRepModal(rep = {}) {
@@ -4238,25 +4825,19 @@ function openCustomerModal(customer = {}) {
           <label>Order day ${helpIcon("Day we usually take their order (call/visit/text). Example: If order day is Mon, pack Mon, deliver Tue. Usual plan only; you can still add one-off changes.")} 
             <select name="orderDay1">
               <option value="">Select day</option>
-              ${dayNames
-                .map((day, index) => `<option value="${index}" ${Number(schedule.orderDay1) === index ? "selected" : ""}>${day}</option>`)
-                .join("")}
+              ${buildWeekdayOptions(schedule.orderDay1)}
             </select>
           </label>
           <label>Pack day ${helpIcon("Day we usually pack for this order. If blank, it defaults to the order day. Usual plan only; you can still add one-off changes.")} 
             <select name="packDay1">
               <option value="">Default same as order day</option>
-              ${dayNames
-                .map((day, index) => `<option value="${index}" ${Number(schedule.packDay1) === index ? "selected" : ""}>${day}</option>`)
-                .join("")}
+              ${buildWeekdayOptions(schedule.packDay1)}
             </select>
           </label>
           <label>Delivery day ${helpIcon("Day we deliver. If blank, default is the next day after order day. Usual plan only; you can still add one-off changes.")} 
             <select name="deliverDay1">
               <option value="">Default next day</option>
-              ${dayNames
-                .map((day, index) => `<option value="${index}" ${Number(schedule.deliverDay1) === index ? "selected" : ""}>${day}</option>`)
-                .join("")}
+              ${buildWeekdayOptions(schedule.deliverDay1)}
             </select>
           </label>
           <label><input type="checkbox" name="isBiWeeklySecondRun" ${schedule.isBiWeeklySecondRun ? "checked" : ""}/> Biweekly customer (2 runs per week) ${helpIcon("If they order/deliver twice per week, enable this to set a second order + pack + delivery day. Usual plan only; you can still add one-off changes.")}</label>
@@ -4264,25 +4845,19 @@ function openCustomerModal(customer = {}) {
             <label>Second order day ${helpIcon("Second day we take their order. Example: Tue + Fri. Usual plan only; you can still add one-off changes.")} 
               <select name="orderDay2">
                 <option value="">Select day</option>
-                ${dayNames
-                  .map((day, index) => `<option value="${index}" ${Number(schedule.orderDay2) === index ? "selected" : ""}>${day}</option>`)
-                  .join("")}
+                ${buildWeekdayOptions(schedule.orderDay2)}
               </select>
             </label>
             <label>Second pack day ${helpIcon("Second pack day. If blank, it defaults to the second order day. Usual plan only; you can still add one-off changes.")} 
               <select name="packDay2">
                 <option value="">Default same as order day</option>
-                ${dayNames
-                  .map((day, index) => `<option value="${index}" ${Number(schedule.packDay2) === index ? "selected" : ""}>${day}</option>`)
-                  .join("")}
+                ${buildWeekdayOptions(schedule.packDay2)}
               </select>
             </label>
             <label>Second delivery day ${helpIcon("Second delivery day. If blank, default is next day after second order day. Usual plan only; you can still add one-off changes.")} 
               <select name="deliverDay2">
                 <option value="">Default next day</option>
-                ${dayNames
-                  .map((day, index) => `<option value="${index}" ${Number(schedule.deliverDay2) === index ? "selected" : ""}>${day}</option>`)
-                  .join("")}
+                ${buildWeekdayOptions(schedule.deliverDay2)}
               </select>
             </label>
           </div>
@@ -5581,12 +6156,21 @@ function setupEvents() {
     }
     openCustomerModal();
   });
+  on(elements.uploadCustomersCsvBtn, "click", () => {
+    if (!state.reps.length) {
+      alert("Add a rep before importing customers.");
+      return;
+    }
+    elements.uploadCustomersCsvInput?.click();
+  });
+  on(elements.uploadCustomersCsvInput, "change", handleCustomerCsvFileChange);
   on(elements.newRepBtn, "click", () => openRepModal());
   on(elements.sampleDataBtn, "click", loadSampleData);
   on(elements.helpBtn, "click", openHelpModal);
   on(elements.accountLogoutBtn, "click", async () => {
     await signOut();
   });
+  on(elements.wipeCustomersBtn, "click", openWipeCustomersModal);
   on(elements.modalClose, "click", closeModal);
   on(elements.snackbarUndo, "click", async () => {
     if (lastUndo) {
