@@ -57,7 +57,7 @@ Use **Customers → Upload CSV** to import `ov_customers.csv`-style files. The i
 - `suburb` → `customers.suburb` / `suburb1`
 - `state` → `customers.state` / `state1`
 - `postcode` → `customers.postcode` / `postcode1`
-- `order_source` → `customers.order_channel` / `orderChannel`
+- `order_source` → `customers.order_source` / `orderChannel`
 - `delivery_terms` → `customers.delivery_terms` / `deliveryTerms`
 - `notes` → `customerNotes`
 - `packing_days` → `customers.packing_days` / `schedule.packDays`
