@@ -695,10 +695,10 @@ const importState = {
 const customerCsvImportState = {
   fileName: "",
   headers: [],
-  rows: [],
   records: [],
-  report: [],
-  defaultRepId: "",
+  errors: [],
+  headerErrors: [],
+  parseErrors: [],
 };
 
 let lastUndo = null;
@@ -1421,7 +1421,7 @@ function buildScheduleItems(startKey, endKey) {
     const dayIndex = dayIndexFromDateKey(dateKey);
     if (!isWeekdayIndex(dayIndex)) return;
     state.customers.forEach((customer) => {
-      const schedule = customer.schedule;
+      const schedule = normalizeSchedule(customer.schedule || {});
       if (!schedule?.mode || !schedule.frequency) return;
       if (!scheduleAppliesOnDate(schedule, dateKey)) return;
 
@@ -3755,27 +3755,6 @@ function downloadImportReport() {
   URL.revokeObjectURL(url);
 }
 
-const csvHeaderAliases = {
-  storeName: ["store_name", "storename", "store", "storeName"],
-  address: ["fullAddress", "fulladdress", "address", "address1"],
-  suburb: ["suburb", "suburb1"],
-  state: ["state", "state1"],
-  postcode: ["postcode", "postcode1"],
-  contactName: ["contact_name", "contactName", "contactname"],
-  phone: ["phone"],
-  email: ["email"],
-  deliveryTerms: ["delivery_terms", "deliveryTerms", "deliveryterms"],
-  deliveryNotes: ["deliveryNotes", "delivery_notes"],
-  customerNotes: ["customerNotes", "customer_notes"],
-  notes: ["notes"],
-  orderSource: ["order_source", "orderChannel", "orderchannel"],
-  repName: ["rep_name", "assignedRepName", "assignedrepname"],
-  extraFieldsJson: ["extraFields_json"],
-  orderDays: ["order_days", "schedule_customerOrderDays"],
-  deliveryDays: ["delivery_days", "schedule_deliverDays"],
-  packingDays: ["packing_days", "schedule_packDays"],
-};
-
 function normalizeOrderChannel(value) {
   if (!value) return "portal";
   const normalized = String(value).trim().toLowerCase();
@@ -3792,160 +3771,92 @@ function normalizeOrderChannel(value) {
   return map[normalized] || "portal";
 }
 
-function parseCsvDayArray(value) {
-  const isoDays = normaliseDays(value);
-  const mon0Days = isoDays.map((day) => day - 1).filter((day) => day >= 0 && day <= 4);
-  return normalizeDayArray(mon0Days);
+const customerCsvRequiredHeaders = ["store_name", "address"];
+const customerCsvEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function normalizeCustomerCsvHeader(header) {
+  return String(header ?? "").replace(/^\uFEFF/, "").trim().toLowerCase();
 }
 
-function buildCustomerCsvRecords(headers, rows) {
-  return rows.map((row, index) => {
-    const normalizedRow = headers.reduce((acc, header, headerIndex) => {
-      const normalized = normalizeHeader(header);
-      if (!normalized) return acc;
-      acc[normalized] = String(row[headerIndex] ?? "").trim();
-      return acc;
-    }, {});
-    const usedKeys = new Set();
-    const getValue = (aliases = []) => {
-      const aliasList = Array.isArray(aliases) ? aliases : [aliases];
-      for (const alias of aliasList) {
-        const key = normalizeHeader(alias);
-        if (!key) continue;
-        if (key in normalizedRow) {
-          usedKeys.add(key);
-          return normalizedRow[key];
-        }
-      }
-      return "";
-    };
-    const storeName = getValue(csvHeaderAliases.storeName);
-    const contactName = getValue(csvHeaderAliases.contactName);
-    const phone = getValue(csvHeaderAliases.phone);
-    const email = getValue(csvHeaderAliases.email);
-    const address = getValue(csvHeaderAliases.address);
-    const suburb = getValue(csvHeaderAliases.suburb);
-    const stateValue = getValue(csvHeaderAliases.state);
-    const postcode = getValue(csvHeaderAliases.postcode);
-    const orderSource = getValue(csvHeaderAliases.orderSource);
-    const deliveryTerms = getValue(csvHeaderAliases.deliveryTerms);
-    const deliveryNotes = getValue(csvHeaderAliases.deliveryNotes);
-    const customerNotes = getValue(csvHeaderAliases.customerNotes);
-    const notes = getValue(csvHeaderAliases.notes);
-    const repName = getValue(csvHeaderAliases.repName);
-    const packingDays = parseCsvDayArray(getValue(csvHeaderAliases.packingDays));
-    const deliveryDays = parseCsvDayArray(getValue(csvHeaderAliases.deliveryDays));
-    const orderDays = parseCsvDayArray(getValue(csvHeaderAliases.orderDays));
-
-    const combinedNotes = [deliveryNotes, customerNotes, notes].filter(Boolean).join("\n\n").trim();
-    const addressParts = [address, suburb, stateValue, postcode].filter(Boolean);
-    const fullAddress = address || addressParts.join(", ");
-
-    const errors = [];
-    const extraFieldsRaw = getValue(csvHeaderAliases.extraFieldsJson);
-    const extraFieldsBase = parseExtraFieldsJson(extraFieldsRaw);
-    const extras = headers.reduce((acc, header, headerIndex) => {
-      const normalized = normalizeHeader(header);
-      if (!normalized || usedKeys.has(normalized)) return acc;
-      acc[header.trim()] = String(row[headerIndex] ?? "").trim();
-      return acc;
-    }, {});
-    const mergedExtraFields = { ...extraFieldsBase, ...extras };
-    const extraFieldsJson = JSON.stringify(mergedExtraFields);
-
-    return {
-      index,
-      storeName,
-      contactName,
-      phone,
-      email,
-      address,
-      suburb,
-      state: stateValue,
-      postcode,
-      orderSource,
-      deliveryTerms,
-      notes: combinedNotes,
-      repName,
-      packingDays,
-      deliveryDays,
-      orderDays,
-      fullAddress,
-      extraFields: mergedExtraFields,
-      extraFieldsJson,
-      errors,
-    };
-  });
+function resetCustomerCsvImportState() {
+  customerCsvImportState.fileName = "";
+  customerCsvImportState.headers = [];
+  customerCsvImportState.records = [];
+  customerCsvImportState.errors = [];
+  customerCsvImportState.headerErrors = [];
+  customerCsvImportState.parseErrors = [];
 }
 
-function resolveCsvRepId(record, defaultRepId) {
-  if (record.repName) {
-    const normalized = record.repName.trim().toLowerCase();
-    const rep = state.reps.find((item) => item.name.trim().toLowerCase() === normalized);
-    if (rep) return rep.id;
-  }
-  return defaultRepId || "";
+function sanitizeCsvValue(value) {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
 }
 
-function getCsvRecordErrors(record, defaultRepId) {
-  const errors = [...record.errors];
-  if (!record.storeName) {
-    errors.push("Missing store_name.");
-  }
-  if (!record.fullAddress) {
-    errors.push("Missing address/suburb/state/postcode.");
-  }
-  const repId = resolveCsvRepId(record, defaultRepId);
-  if (!repId) {
-    errors.push("Missing rep_name and no default rep selected.");
-  }
-  return errors;
-}
+function buildCustomerCsvRecord(row, index) {
+  const storeName = sanitizeCsvValue(row.store_name);
+  const address = sanitizeCsvValue(row.address);
+  const suburb = sanitizeCsvValue(row.suburb);
+  const stateValue = sanitizeCsvValue(row.state);
+  const postcode = sanitizeCsvValue(row.postcode);
+  const phone = sanitizeCsvValue(row.phone);
+  const email = sanitizeCsvValue(row.email);
+  const contactName = sanitizeCsvValue(row.contact_name);
+  const orderSource = sanitizeCsvValue(row.order_source);
 
-function formatCsvDayLabel(values = []) {
-  return formatDayArrayLabel(values);
+  const errors = [];
+  if (!storeName) errors.push("Missing store_name.");
+  if (!address) errors.push("Missing address.");
+  if (email && !customerCsvEmailPattern.test(email)) errors.push("Invalid email.");
+
+  return {
+    index,
+    store_name: storeName,
+    address,
+    suburb,
+    state: stateValue,
+    postcode,
+    phone,
+    email,
+    contact_name: contactName,
+    order_source: orderSource,
+    errors,
+  };
 }
 
 function renderCustomerCsvModal() {
   const totalRows = customerCsvImportState.records.length;
-  const defaultRepId = customerCsvImportState.defaultRepId;
   const previewRows = customerCsvImportState.records.slice(0, 20);
   const detectedColumns = customerCsvImportState.headers.filter(Boolean).join(", ");
-  const errors = [];
+  const errorRows = customerCsvImportState.errors || [];
+  const headerErrors = customerCsvImportState.headerErrors || [];
+  const parseErrors = customerCsvImportState.parseErrors || [];
+  const hasErrors = headerErrors.length || parseErrors.length || errorRows.length;
 
-  customerCsvImportState.records.forEach((record) => {
-    const recordErrors = getCsvRecordErrors(record, defaultRepId);
-    if (recordErrors.length) {
-      errors.push({ index: record.index, errors: recordErrors });
-    }
-  });
-
-  const errorList = errors
-    .slice(0, 20)
-    .map((item) => `<li>Row ${item.index + 1}: ${item.errors.join(" ")}</li>`)
-    .join("");
-  const errorNote = errors.length > 20 ? `<p class="muted">Showing first 20 errors.</p>` : "";
-
-  const repOptions = getRepOptions(false)
-    .map(
-      (rep) => `<option value="${rep.id}" ${rep.id === defaultRepId ? "selected" : ""}>${rep.name}</option>`
-    )
-    .join("");
+  const errorItems = [
+    ...headerErrors.map((message) => `<li>${message}</li>`),
+    ...parseErrors.map((message) => `<li>${message}</li>`),
+    ...errorRows
+      .slice(0, 20)
+      .map((item) => `<li>Row ${item.index + 1}: ${item.errors.join(" ")}</li>`),
+  ].join("");
+  const errorNote = errorRows.length > 20 ? `<p class="muted">Showing first 20 row errors.</p>` : "";
 
   const tableRows = previewRows
     .map((record) => {
-      const recordErrors = getCsvRecordErrors(record, defaultRepId);
-      const status = recordErrors.length ? "Needs attention" : "Ready";
+      const status = record.errors.length ? "Needs attention" : "Ready";
       return `
         <tr>
           <td>${record.index + 1}</td>
-          <td>${record.storeName || "—"}</td>
-          <td>${record.fullAddress || "—"}</td>
+          <td>${record.store_name || "—"}</td>
+          <td>${record.address || "—"}</td>
+          <td>${record.suburb || "—"}</td>
+          <td>${record.state || "—"}</td>
+          <td>${record.postcode || "—"}</td>
+          <td>${record.phone || "—"}</td>
           <td>${record.email || "—"}</td>
-          <td>${formatCsvDayLabel(record.orderDays)}</td>
-          <td>${formatCsvDayLabel(record.packingDays)}</td>
-          <td>${formatCsvDayLabel(record.deliveryDays)}</td>
-          <td><span class="status-badge ${recordErrors.length ? "" : "ok"}">${status}</span></td>
+          <td>${record.contact_name || "—"}</td>
+          <td>${record.order_source || "—"}</td>
+          <td><span class="status-badge ${record.errors.length ? "" : "ok"}">${status}</span></td>
         </tr>
       `;
     })
@@ -3956,52 +3867,51 @@ function renderCustomerCsvModal() {
     <p class="muted">${customerCsvImportState.fileName || "CSV import"} • ${totalRows} rows detected.</p>
     <p class="muted">Detected columns: ${detectedColumns || "None"}</p>
     <div class="card">
-      <label>Default rep for missing/unknown rep_name
-        <select id="csvImportDefaultRep">
-          <option value="">Select rep</option>
-          ${repOptions}
-        </select>
+      <label>CSV file
+        <input id="customerCsvFileInput" type="file" accept=".csv" />
       </label>
     </div>
     <div class="card">
       <h3>Preview (first 20 rows)</h3>
-      <table class="preview-table">
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Store name</th>
-            <th>Address</th>
-            <th>Email</th>
-            <th>Order days</th>
-            <th>Pack days</th>
-            <th>Delivery days</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>${tableRows}</tbody>
-      </table>
+      ${
+        tableRows
+          ? `
+            <table class="preview-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Store name</th>
+                  <th>Address</th>
+                  <th>Suburb</th>
+                  <th>State</th>
+                  <th>Postcode</th>
+                  <th>Phone</th>
+                  <th>Email</th>
+                  <th>Contact</th>
+                  <th>Order source</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>${tableRows}</tbody>
+            </table>
+          `
+          : "<p class=\"muted\">Choose a CSV file to preview data.</p>"
+      }
     </div>
     <div class="card">
       <h3>Errors</h3>
-      ${
-        errorList
-          ? `<ul class="muted">${errorList}</ul>${errorNote}`
-          : "<p class=\"muted\">No errors in preview.</p>"
-      }
+      ${errorItems ? `<ul class="muted">${errorItems}</ul>${errorNote}` : "<p class=\"muted\">No errors in preview.</p>"}
       <div id="csvImportResults" class="muted"></div>
     </div>
     <div class="form-actions">
       <button class="secondary" type="button" id="csvImportCancel">Cancel</button>
-      <button class="primary" type="button" id="csvImportRunBtn" data-requires-online="true">Import</button>
+      <button class="primary" type="button" id="csvImportRunBtn" data-requires-online="true" ${hasErrors || !totalRows ? "disabled" : ""}>Import</button>
     </div>
   `);
 
-  const defaultRepSelect = document.getElementById("csvImportDefaultRep");
-  if (defaultRepSelect) {
-    defaultRepSelect.addEventListener("change", () => {
-      customerCsvImportState.defaultRepId = defaultRepSelect.value;
-      renderCustomerCsvModal();
-    });
+  const fileInput = document.getElementById("customerCsvFileInput");
+  if (fileInput) {
+    fileInput.addEventListener("change", handleCustomerCsvFileChange);
   }
   const cancelBtn = document.getElementById("csvImportCancel");
   if (cancelBtn) {
@@ -4013,38 +3923,50 @@ function renderCustomerCsvModal() {
   }
 }
 
-function findExistingCustomerForCsv(record) {
-  const email = record.email?.trim().toLowerCase();
-  if (email) {
-    const matchByEmail = state.customers.find(
-      (customer) => customer.email && customer.email.trim().toLowerCase() === email
-    );
-    if (matchByEmail) return matchByEmail;
+async function handleCustomerCsvFileChange(event) {
+  const file = event.target?.files?.[0];
+  if (!file) return;
+  if (!window.Papa) {
+    alert("CSV parser is unavailable. Please refresh and try again.");
+    return;
   }
-  const storeName = record.storeName?.trim().toLowerCase();
-  const address = record.fullAddress?.trim().toLowerCase();
-  const postcode = record.postcode?.trim().toLowerCase();
-  if (!storeName || !address || !postcode) return null;
-  return state.customers.find((customer) => {
-    const existingStore = customer.storeName?.trim().toLowerCase();
-    const existingAddress = customer.fullAddress?.trim().toLowerCase();
-    const existingPostcode = customer.postcode1?.trim().toLowerCase();
-    return existingStore === storeName && existingAddress === address && existingPostcode === postcode;
+
+  const text = await file.text();
+  const parsed = window.Papa.parse(text, {
+    header: true,
+    skipEmptyLines: true,
+    transformHeader: normalizeCustomerCsvHeader,
+    transform: (value) => (typeof value === "string" ? value.trim() : value),
   });
+
+  customerCsvImportState.fileName = file.name;
+  customerCsvImportState.headers = parsed.meta?.fields || [];
+  customerCsvImportState.parseErrors = (parsed.errors || [])
+    .map((error) => error?.message || error?.type || "CSV parse error.")
+    .filter(Boolean);
+  customerCsvImportState.headerErrors = customerCsvRequiredHeaders
+    .filter((header) => !customerCsvImportState.headers.includes(header))
+    .map((header) => `Missing required header: ${header}.`);
+  customerCsvImportState.records = (parsed.data || []).map((row, index) => buildCustomerCsvRecord(row, index));
+  customerCsvImportState.errors = customerCsvImportState.records
+    .filter((record) => record.errors.length)
+    .map((record) => ({ index: record.index, errors: record.errors }));
+
+  renderCustomerCsvModal();
+  event.target.value = "";
 }
 
-function buildScheduleFromCsv(record, existingSchedule = {}) {
-  const hasOrderDays = record.orderDays && record.orderDays.length;
-  const baseSchedule = normalizeSchedule(existingSchedule || {});
-  const nextSchedule = {
-    ...baseSchedule,
-    mode: hasOrderDays ? "THEY_PUT_ORDER" : baseSchedule.mode,
-    frequency: hasOrderDays ? "WEEKLY" : baseSchedule.frequency,
-    customerOrderDays: record.orderDays.length ? record.orderDays : baseSchedule.customerOrderDays,
-    packDays: record.packingDays.length ? record.packingDays : baseSchedule.packDays,
-    deliverDays: record.deliveryDays.length ? record.deliveryDays : baseSchedule.deliverDays,
-  };
-  return normalizeSchedule(nextSchedule);
+async function upsertCustomerCsvBatch(records, onConflict, resultsEl) {
+  const chunkSize = 200;
+  for (let start = 0; start < records.length; start += chunkSize) {
+    const chunk = records.slice(start, start + chunkSize);
+    if (!chunk.length) continue;
+    if (resultsEl) {
+      resultsEl.textContent = `Syncing ${Math.min(start + chunk.length, records.length)}/${records.length} customers…`;
+    }
+    const { error } = await supabase.from("customers").upsert(chunk, { onConflict });
+    if (error) throw error;
+  }
 }
 
 async function handleCustomerCsvImport() {
@@ -4052,168 +3974,76 @@ async function handleCustomerCsvImport() {
     showOfflineAlert();
     return;
   }
+  if (!supabaseAvailable || !state.session) {
+    showSnackbar("Sign in to import customers.");
+    return;
+  }
   if (!customerCsvImportState.records.length) {
     alert("No CSV rows loaded.");
     return;
   }
-  const defaultRepId = customerCsvImportState.defaultRepId;
+  if (customerCsvImportState.headerErrors.length || customerCsvImportState.errors.length) {
+    alert("Fix CSV errors before importing.");
+    return;
+  }
+  const userId = getCurrentUserId();
+  if (!userId) {
+    showSnackbar("Not logged in.");
+    return;
+  }
+
   const resultsEl = document.getElementById("csvImportResults");
   if (resultsEl) {
     resultsEl.textContent = "Importing customers…";
   }
-  let created = 0;
-  let updated = 0;
-  let failed = 0;
-  const report = [];
-  const supabaseBatch = [];
 
-  for (const record of customerCsvImportState.records) {
-    const recordErrors = getCsvRecordErrors(record, defaultRepId);
-    if (recordErrors.length) {
-      failed += 1;
-      report.push({ index: record.index, storeName: record.storeName, errors: recordErrors });
-      continue;
+  const payloads = customerCsvImportState.records
+    .filter((record) => !record.errors.length)
+    .map((record) => ({
+      user_id: userId,
+      store_name: record.store_name,
+      address: record.address,
+      suburb: record.suburb || null,
+      state: record.state || null,
+      postcode: record.postcode || null,
+      phone: record.phone || null,
+      email: record.email || null,
+      contact_name: record.contact_name || null,
+      order_source: record.order_source || null,
+      updated_at: new Date().toISOString(),
+    }));
+
+  const withEmail = payloads.filter((row) => row.email);
+  const noEmail = payloads.filter((row) => !row.email);
+
+  try {
+    if (withEmail.length) {
+      await upsertCustomerCsvBatch(withEmail, "user_id,email", resultsEl);
     }
-
-    const assignedRepId = resolveCsvRepId(record, defaultRepId);
-    const existing = findExistingCustomerForCsv(record);
-    const channel = normalizeOrderChannel(record.orderSource || existing?.orderChannel || "portal");
-    const payload = {
-      id: existing ? existing.id : createCustomerId(),
-      customerId: existing?.customerId || "",
-      storeName: record.storeName || existing?.storeName || "Unnamed",
-      contactName: record.contactName || existing?.contactName || "",
-      phone: record.phone || existing?.phone || "",
-      email: record.email || existing?.email || "",
-      fullAddress: record.fullAddress || existing?.fullAddress || "",
-      address1: record.address || existing?.address1 || "",
-      suburb1: record.suburb || existing?.suburb1 || "",
-      state1: record.state || existing?.state1 || "",
-      postcode1: record.postcode || existing?.postcode1 || "",
-      deliveryNotes: existing?.deliveryNotes || "",
-      deliveryTerms: record.deliveryTerms || existing?.deliveryTerms || "",
-      assignedRepId: assignedRepId || existing?.assignedRepId || "",
-      repName: record.repName || repName(assignedRepId),
-      orderChannel: channel,
-      orderTermsLabel: orderTermsLabelFromChannel(channel),
-      averageOrderValue: existing?.averageOrderValue ?? null,
-      packOffsetDays: existing?.packOffsetDays ?? 0,
-      deliveryOffsetDays: existing?.deliveryOffsetDays ?? 1,
-      cadenceType: existing?.cadenceType ?? null,
-      cadenceDayOfWeek: existing?.cadenceDayOfWeek || "Monday",
-      cadenceDaysOfWeek: existing?.cadenceDaysOfWeek || [],
-      cadenceEveryNDays: existing?.cadenceEveryNDays || null,
-      cadenceNextDueDate: existing?.cadenceNextDueDate || null,
-      autoAdvanceCadence: existing?.autoAdvanceCadence || false,
-      customerNotes: record.notes || existing?.customerNotes || "",
-      schedule: buildScheduleFromCsv(record, existing?.schedule),
-      extraFields: { ...(existing?.extraFields || {}), ...(record.extraFields || {}) },
-      extraFieldsJson: record.extraFieldsJson || existing?.extraFieldsJson || null,
-    };
-
-    try {
-      await put("customers", payload);
-    } catch (error) {
-      console.error("IndexedDB write failed", error);
-      failed += 1;
-      report.push({ index: record.index, storeName: record.storeName, errors: ["Local save failed."] });
-      continue;
+    if (noEmail.length) {
+      await upsertCustomerCsvBatch(noEmail, "user_id,store_name,address", resultsEl);
     }
-
-    supabaseBatch.push(payload);
-    if (existing) {
-      updated += 1;
-      state.customers = state.customers.map((item) => (item.id === payload.id ? payload : item));
-    } else {
-      created += 1;
-      state.customers.push(payload);
+    if (resultsEl) {
+      resultsEl.textContent = `Imported ${payloads.length} customers.`;
     }
-  }
-
-  if (supabaseBatch.length) {
-    try {
-      await syncUpsertBatch("customers", supabaseBatch, mapCustomerToSupabase, {
-        onProgress: (done, total) => {
-          if (resultsEl) {
-            resultsEl.textContent = `Syncing ${done}/${total} customers…`;
-          }
-        },
+    const loadResult = await loadFromSupabase();
+    if (loadResult?.status === "error") {
+      await loadState({
+        useLocalCustomers: false,
+        useLocalScheduleEvents: false,
+        stickyNotesUserId: state.session?.user?.id || null,
       });
-      updateConnectionStatus({ status: "Online/Synced", canWrite: true });
-      setCloudStatus("synced", toISO());
-    } catch (error) {
-      console.error("Supabase upsert failed", error);
-      const payloadKeys = Array.from(
-        new Set(supabaseBatch.flatMap((item) => Object.keys(mapCustomerToSupabase(item))))
-      );
-      console.error("Supabase customer payload keys", payloadKeys);
-      handleSupabaseError(error, { context: "Supabase import failed", alertOnOffline: true });
-      if (resultsEl) {
-        resultsEl.textContent = "Supabase sync failed. Local import completed.";
-      }
-      return;
+    } else {
+      await loadState({ stickyNotesUserId: state.session?.user?.id || null });
     }
-  }
-
-  customerCsvImportState.report = report;
-  if (resultsEl) {
-    const reportText = report.length
-      ? `Failed rows: ${report.length}. ${report
-          .slice(0, 5)
-          .map((item) => `Row ${item.index + 1}`)
-          .join(", ")}${report.length > 5 ? "…" : ""}`
-      : "No failed rows.";
-    resultsEl.textContent = `Imported ${created + updated} customers (${created} created, ${updated} updated). ${reportText}`;
-  }
-  showSnackbar(`Imported ${created + updated} customers (${updated} updated, ${created} created).`);
-  renderAll();
-}
-
-async function handleCustomerCsvFileChange() {
-  const file = elements.uploadCustomersCsvInput?.files?.[0];
-  if (!file) return;
-  const text = await file.text();
-  const rows = parseCsv(text);
-  if (rows.length < 2) {
-    alert("CSV appears to be empty.");
-    return;
-  }
-  const headers = rows[0].map((header) => String(header ?? "").replace(/^\uFEFF/, "").trim());
-  const normalizedHeaders = headers.map((header) => normalizeHeader(header));
-  const normalizedHeaderSet = new Set(normalizedHeaders);
-  const hasHeaderAlias = (aliases) =>
-    aliases.map((alias) => normalizeHeader(alias)).some((alias) => normalizedHeaderSet.has(alias));
-  const missing = [];
-  if (!hasHeaderAlias(csvHeaderAliases.storeName)) {
-    missing.push({
-      label: "store name",
-      aliases: csvHeaderAliases.storeName,
-    });
-  }
-  if (!hasHeaderAlias(csvHeaderAliases.address)) {
-    missing.push({
-      label: "address",
-      aliases: csvHeaderAliases.address,
-    });
-  }
-  if (missing.length) {
-    const details = missing
-      .map((item) => `${item.label} (aliases: ${item.aliases.join(", ")})`)
-      .join("; ");
-    alert(`Missing required headers: ${details}.`);
-    return;
-  }
-  const dataRows = rows.slice(1);
-  customerCsvImportState.fileName = file.name;
-  customerCsvImportState.headers = headers;
-  customerCsvImportState.rows = dataRows;
-  customerCsvImportState.records = buildCustomerCsvRecords(headers, dataRows);
-  if (!customerCsvImportState.defaultRepId && state.reps.length === 1) {
-    customerCsvImportState.defaultRepId = state.reps[0].id;
-  }
-  renderCustomerCsvModal();
-  if (elements.uploadCustomersCsvInput) {
-    elements.uploadCustomersCsvInput.value = "";
+    renderAll();
+    showSnackbar(`Imported ${payloads.length} customers.`);
+  } catch (error) {
+    console.error("Supabase upsert failed", error);
+    handleSupabaseError(error, { context: "Supabase import failed", alertOnOffline: true });
+    if (resultsEl) {
+      resultsEl.textContent = "Supabase import failed. Check your connection and try again.";
+    }
   }
 }
 
@@ -6251,13 +6081,9 @@ function setupEvents() {
     openCustomerModal();
   });
   on(elements.uploadCustomersCsvBtn, "click", () => {
-    if (!state.reps.length) {
-      alert("Add a rep before importing customers.");
-      return;
-    }
-    elements.uploadCustomersCsvInput?.click();
+    resetCustomerCsvImportState();
+    renderCustomerCsvModal();
   });
-  on(elements.uploadCustomersCsvInput, "change", handleCustomerCsvFileChange);
   on(elements.newRepBtn, "click", () => openRepModal());
   on(elements.sampleDataBtn, "click", loadSampleData);
   on(elements.helpBtn, "click", openHelpModal);

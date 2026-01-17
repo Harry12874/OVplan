@@ -195,6 +195,13 @@ const ISO_DAY_LABELS = {
   sunday: 7,
 };
 
+const ISO_WEEKEND_DAYS = new Set([6, 7]);
+
+function filterWeekendIsoDays(values = []) {
+  if (!Array.isArray(values)) return [];
+  return values.filter((value) => !ISO_WEEKEND_DAYS.has(value));
+}
+
 function normaliseDays(input) {
   if (input === null || input === undefined) return [];
   let values = [];
@@ -247,8 +254,9 @@ function normaliseDays(input) {
       .filter((value) => value >= 1 && value <= 7);
   }
 
-  const combined = isoFromLabels.concat(isoFromNumbers).filter((value) => value >= 1 && value <= 5);
-  return Array.from(new Set(combined)).sort((a, b) => a - b);
+  const combined = isoFromLabels.concat(isoFromNumbers).filter((value) => value >= 1 && value <= 7);
+  const weekdays = filterWeekendIsoDays(combined);
+  return Array.from(new Set(weekdays)).sort((a, b) => a - b);
 }
 
 function dayIndexFromDateKey(dateKey) {
@@ -276,5 +284,6 @@ export {
   normalizeHeader,
   parseCsv,
   detectNumericColumns,
+  filterWeekendIsoDays,
   normaliseDays,
 };
