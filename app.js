@@ -1691,23 +1691,29 @@ function exportSelectedScheduleItems() {
   const selectedItems = state.visibleScheduleItems.filter((item) =>
     state.selectedScheduleItems.has(item.selectionId)
   );
-  const deliveryItems = selectedItems.filter(
-    (item) => (item.kind === "custom_oneoff" ? item.oneOffKind : item.kind) === "delivery"
-  );
-  if (!deliveryItems.length) {
-    alert("Select at least one delivery to export.");
+  const exportItems = selectedItems.filter((item) => {
+    const baseKind = item.kind === "custom_oneoff" ? item.oneOffKind : item.kind;
+    return baseKind === "delivery" || baseKind === "expected_order";
+  });
+  if (!exportItems.length) {
+    alert("Select at least one order or delivery to export.");
     return;
   }
   const preset = getActivePreset();
   if (!preset) return;
-  const records = deliveryItems.map((item) => {
+  const records = exportItems.map((item) => {
     const customer = customerById(item.customerId) || {};
     const rep = state.reps.find((entry) => entry.id === item.repId) || {};
+    const baseKind = item.kind === "custom_oneoff" ? item.oneOffKind : item.kind;
+    const isDelivery = baseKind === "delivery";
+    const eventType = isDelivery ? "delivery" : "order";
     return {
       task: {
         dueDate: item.date,
         assignedRepId: item.repId || "",
-        title: buildTaskTitle({ kind: "delivery", customer, order: {} }),
+        type: eventType,
+        eventType,
+        title: buildTaskTitle({ kind: isDelivery ? "delivery" : "order", customer, order: {} }),
       },
       order: {},
       customer,
@@ -1715,7 +1721,7 @@ function exportSelectedScheduleItems() {
     };
   });
   const csv = buildCsv(records, preset.columns);
-  downloadCsv(`spoke-export-${todayKey()}.csv`, csv);
+  downloadCsv(`spoke_orders_and_deliveries-${todayKey()}.csv`, csv);
 }
 
 function startOfWeekMonday(dateKey) {
@@ -6083,7 +6089,7 @@ async function handleExport() {
   const preset = getActivePreset();
   if (!preset) return;
   const csv = buildCsv(records, preset.columns);
-  downloadCsv(`deliveries-${elements.exportStart.value || todayKey()}.csv`, csv);
+  downloadCsv(`spoke_orders_and_deliveries-${elements.exportStart.value || todayKey()}.csv`, csv);
   elements.exportSummary.textContent = `${records.length} stops exported.`;
 }
 
