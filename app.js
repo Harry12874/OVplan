@@ -1801,36 +1801,6 @@ function getCurrentUserId() {
   return state.session?.user?.id || null;
 }
 
-const customerSupabaseColumns = new Set([
-  "id",
-  "user_id",
-  "store_name",
-  "contact_name",
-  "phone",
-  "email",
-  "address",
-  "suburb",
-  "state",
-  "postcode",
-  "order_source",
-  "delivery_terms",
-  "notes",
-  "packing_days",
-  "delivery_days",
-  "order_days",
-  "rep_name",
-  "extraFields_json",
-]);
-
-function sanitizeCustomerPayload(raw) {
-  return Object.keys(raw).reduce((acc, key) => {
-    if (customerSupabaseColumns.has(key)) {
-      acc[key] = raw[key];
-    }
-    return acc;
-  }, {});
-}
-
 function parseExtraFieldsJson(raw) {
   if (!raw) return {};
   if (typeof raw === "object") {
@@ -1845,28 +1815,25 @@ function parseExtraFieldsJson(raw) {
   }
 }
 
-function buildExtraFieldsJson(extraFields, extraFieldsJson) {
-  const base = parseExtraFieldsJson(extraFieldsJson);
-  const merged = {
-    ...base,
-    ...(extraFields || {}),
-  };
-  return JSON.stringify(merged);
-}
-
 function resolveCustomerRepName(customer) {
   const repLabel = customer.repName || repName(customer.assignedRepId);
   return repLabel && repLabel !== "Unassigned" ? repLabel : null;
 }
 
-function mapCustomerToSupabase(customer) {
+function normalizeCustomerJson(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {};
+  }
+  return raw;
+}
+
+function buildCustomerJsonFromCustomer(customer) {
   const schedule = normalizeSchedule(customer.schedule || {});
   const orderSource = normalizeOrderChannel(
     customer.orderSource || customer.orderChannel || customer.channelPreference || "portal"
   );
-  const extraFieldsJson = buildExtraFieldsJson(customer.extraFields, customer.extraFieldsJson);
-  const payload = {
-    id: customer.id,
+  return {
+    customer_id: customer.customerId || "",
     store_name: customer.storeName || "",
     address: customer.fullAddress || "",
     suburb: customer.suburb1 || "",
@@ -1875,51 +1842,103 @@ function mapCustomerToSupabase(customer) {
     contact_name: customer.contactName || "",
     phone: customer.phone || "",
     email: customer.email || "",
+    delivery_notes: customer.deliveryNotes || "",
     delivery_terms: customer.deliveryTerms || "",
     order_source: orderSource,
+    order_terms_label: customer.orderTermsLabel || orderTermsLabelFromChannel(orderSource),
     notes: [customer.customerNotes, customer.deliveryNotes].filter(Boolean).join("\n\n").trim(),
-    delivery_days: schedule.deliverDays || [],
-    packing_days: schedule.packDays || [],
-    order_days: schedule.customerOrderDays || [],
-    rep_name: resolveCustomerRepName(customer),
-    extraFields_json: extraFieldsJson,
+    average_order_value: customer.averageOrderValue ?? null,
+    assigned_rep_id: customer.assignedRepId || "",
+    extra_fields: customer.extraFields || {},
+    scheduling: {
+      order_method: schedule.mode || null,
+      frequency: schedule.frequency || null,
+      anchor_date: schedule.anchorDate || null,
+      order_day_1: schedule.orderDay1 ?? null,
+      pack_day_1: schedule.packDay1 ?? null,
+      delivery_day_1: schedule.deliverDay1 ?? null,
+      is_biweekly_second_run: Boolean(schedule.isBiWeeklySecondRun),
+      order_day_2: schedule.orderDay2 ?? null,
+      pack_day_2: schedule.packDay2 ?? null,
+      delivery_day_2: schedule.deliverDay2 ?? null,
+      order_days: schedule.customerOrderDays || [],
+      packing_days: schedule.packDays || [],
+      delivery_days: schedule.deliverDays || [],
+    },
   };
-  return sanitizeCustomerPayload(payload);
+}
+
+function mergeCustomerJson(existingJson, customerJson) {
+  const base = normalizeCustomerJson(existingJson);
+  return {
+    ...base,
+    ...customerJson,
+    scheduling: {
+      ...(base.scheduling || {}),
+      ...(customerJson.scheduling || {}),
+    },
+  };
+}
+
+function mapCustomerToSupabase(customer) {
+  const customerJson = buildCustomerJsonFromCustomer(customer);
+  const mergedJson = mergeCustomerJson(customer.json, customerJson);
+  const userId = getCurrentUserId();
+  return {
+    id: customer.id,
+    rep_name: resolveCustomerRepName(customer),
+    json: mergedJson,
+    user_id: userId,
+  };
 }
 
 function mapCustomerFromSupabase(row) {
+  const json = normalizeCustomerJson(row?.json);
+  const scheduling = normalizeCustomerJson(json.scheduling || json.schedule);
   const schedule = normalizeSchedule({
-    customerOrderDays: normalizeDayArray(row?.order_days || []),
-    deliverDays: normalizeDayArray(row?.delivery_days || []),
-    packDays: normalizeDayArray(row?.packing_days || []),
+    mode: scheduling.order_method ?? scheduling.mode ?? null,
+    frequency: scheduling.frequency ?? null,
+    anchorDate: scheduling.anchor_date ?? scheduling.anchorDate ?? null,
+    orderDay1: scheduling.order_day_1 ?? scheduling.orderDay1 ?? null,
+    packDay1: scheduling.pack_day_1 ?? scheduling.packDay1 ?? null,
+    deliverDay1: scheduling.delivery_day_1 ?? scheduling.deliverDay1 ?? null,
+    isBiWeeklySecondRun: scheduling.is_biweekly_second_run ?? scheduling.isBiWeeklySecondRun ?? false,
+    orderDay2: scheduling.order_day_2 ?? scheduling.orderDay2 ?? null,
+    packDay2: scheduling.pack_day_2 ?? scheduling.packDay2 ?? null,
+    deliverDay2: scheduling.delivery_day_2 ?? scheduling.deliverDay2 ?? null,
+    customerOrderDays: normalizeDayArray(scheduling.order_days ?? scheduling.customerOrderDays ?? row?.order_days || []),
+    deliverDays: normalizeDayArray(scheduling.delivery_days ?? scheduling.deliverDays ?? row?.delivery_days || []),
+    packDays: normalizeDayArray(scheduling.packing_days ?? scheduling.packDays ?? row?.packing_days || []),
   });
   const repNameValue = row?.rep_name ?? "";
   const repIdFromName = repNameValue
     ? state.reps.find((rep) => rep.name.trim().toLowerCase() === repNameValue.trim().toLowerCase())?.id || ""
     : "";
-  const extraFields = parseExtraFieldsJson(row?.extraFields_json);
+  const extraFields = json.extra_fields || parseExtraFieldsJson(row?.extraFields_json);
   return {
     id: row?.id || createCustomerId(),
-    customerId: "",
-    storeName: row?.store_name ?? "",
-    contactName: row?.contact_name ?? "",
-    phone: row?.phone ?? "",
-    email: row?.email ?? "",
-    fullAddress: row?.address ?? "",
-    address1: row?.address ?? "",
-    suburb1: row?.suburb ?? "",
-    state1: row?.state ?? "",
-    postcode1: row?.postcode ?? "",
-    deliveryNotes: "",
-    deliveryTerms: row?.delivery_terms ?? "",
-    assignedRepId: repIdFromName,
-    orderChannel: normalizeOrderChannel(row?.order_source || "portal"),
-    averageOrderValue: null,
+    customerId: json.customer_id ?? "",
+    storeName: json.store_name ?? row?.store_name ?? "",
+    contactName: json.contact_name ?? row?.contact_name ?? "",
+    phone: json.phone ?? row?.phone ?? "",
+    email: json.email ?? row?.email ?? "",
+    fullAddress: json.address ?? row?.address ?? "",
+    address1: json.address ?? row?.address ?? "",
+    suburb1: json.suburb ?? row?.suburb ?? "",
+    state1: json.state ?? row?.state ?? "",
+    postcode1: json.postcode ?? row?.postcode ?? "",
+    deliveryNotes: json.delivery_notes ?? "",
+    deliveryTerms: json.delivery_terms ?? row?.delivery_terms ?? "",
+    assignedRepId: json.assigned_rep_id ?? repIdFromName,
+    orderChannel: normalizeOrderChannel(json.order_source || row?.order_source || "portal"),
+    orderTermsLabel: json.order_terms_label ?? orderTermsLabelFromChannel(json.order_source || row?.order_source || "portal"),
+    averageOrderValue: json.average_order_value ?? null,
     extraFields,
     extraFieldsJson: row?.extraFields_json ?? null,
     schedule,
     repName: repNameValue || "",
-    customerNotes: row?.notes ?? "",
+    customerNotes: json.notes ?? row?.notes ?? "",
+    json,
   };
 }
 
@@ -2044,16 +2063,20 @@ async function loadFromSupabase() {
 }
 
 async function syncUpsertCustomer(customer, { mode } = {}) {
-  const payload = mapCustomerToSupabase(customer);
+  const customerJson = buildCustomerJsonFromCustomer(customer);
+  const mergedJson = mergeCustomerJson(customer.json, customerJson);
+  const payload = {
+    id: customer.id,
+    rep_name: resolveCustomerRepName(customer),
+    json: mergedJson,
+  };
   const userId = state.session?.user?.id;
   if (!state.session || !userId) {
     console.warn("Customer save blocked: missing session.");
     showSnackbar("Sign in to save customers.");
     throw new Error("Missing session");
   }
-  if (BUILD_ID === "dev") {
-    console.log("Customer payload", payload);
-  }
+  console.log("Customer payload", payload);
   setCloudStatus("syncing");
   const payloadWithUser = userId ? { ...payload, user_id: userId } : payload;
   const { data, error } = await supabase.from("customers").upsert(payloadWithUser).select().single();
@@ -2075,9 +2098,7 @@ async function syncUpsertCustomer(customer, { mode } = {}) {
   if (!data) {
     throw new Error("Customer update failed. Record not found.");
   }
-  if (BUILD_ID === "dev") {
-    console.log("Customer row saved", data);
-  }
+  console.log("Customer row saved", data);
   return mapCustomerFromSupabase(data);
 }
 
@@ -5038,6 +5059,67 @@ function openCustomerModal(customer = {}) {
   `);
   disableFormIfOffline("customerForm");
 
+  const form = document.getElementById("customerForm");
+  let formState = {
+    customerId: customer.customerId || customer.externalCustomerId || "",
+    storeName: customer.storeName || "",
+    contactName: customer.contactName || "",
+    phone: customer.phone || "",
+    email: customer.email || "",
+    fullAddress: customer.fullAddress || "",
+    address1: customer.address1 || customer.street || "",
+    suburb1: customer.suburb1 || customer.suburb || "",
+    state1: customer.state1 || customer.state || "",
+    postcode1: customer.postcode1 || customer.postcode || "",
+    deliveryNotes: customer.deliveryNotes || "",
+    deliveryTerms: customer.deliveryTerms || "",
+    assignedRepId: customer.assignedRepId || "",
+    orderChannel,
+    averageOrderValue: customer.averageOrderValue ?? "",
+    customerNotes: customer.customerNotes || "",
+    schedule: {
+      ...schedule,
+    },
+  };
+
+  const updateFormState = (updater) => {
+    formState = updater(formState);
+  };
+
+  const bindInput = (name, { event = "input" } = {}) => {
+    const input = form.querySelector(`[name="${name}"]`);
+    if (!input) return;
+    if (input.type === "checkbox") {
+      input.checked = Boolean(formState[name]);
+    } else {
+      input.value = formState[name] ?? "";
+    }
+    input.addEventListener(event, () => {
+      const value = input.type === "checkbox" ? input.checked : input.value;
+      updateFormState((prev) => ({ ...prev, [name]: value }));
+    });
+  };
+
+  const bindScheduleField = (name, key, parser = (value) => value) => {
+    const input = form.querySelector(`[name="${name}"]`);
+    if (!input) return;
+    if (input.type === "checkbox") {
+      input.checked = Boolean(formState.schedule?.[key]);
+    } else {
+      input.value = formState.schedule?.[key] ?? "";
+    }
+    input.addEventListener("change", () => {
+      const value = input.type === "checkbox" ? input.checked : parser(input.value);
+      updateFormState((prev) => ({
+        ...prev,
+        schedule: {
+          ...prev.schedule,
+          [key]: value,
+        },
+      }));
+    });
+  };
+
   document.getElementById("cancelCustomer").addEventListener("click", closeModal);
   const deleteCustomerBtn = document.getElementById("deleteCustomerBtn");
   if (deleteCustomerBtn) {
@@ -5061,24 +5143,70 @@ function openCustomerModal(customer = {}) {
     secondRunWrap.style.display = secondRunToggle.checked ? "grid" : "none";
   };
 
-  const toggleDayButton = (button) => {
-    button.classList.toggle("selected");
+  const setDayButtons = (role, selectedDays) => {
+    const container = document.querySelector(`[data-day-role="${role}"]`);
+    if (!container) return;
+    container.querySelectorAll(".day-button").forEach((btn) => {
+      const day = Number(btn.dataset.day);
+      btn.classList.toggle("selected", selectedDays.includes(day));
+    });
   };
 
   document.querySelectorAll(".day-button").forEach((button) => {
-    button.addEventListener("click", () => toggleDayButton(button));
+    button.addEventListener("click", () => {
+      const role = button.closest(".day-buttons")?.dataset.dayRole;
+      if (!role) return;
+      updateFormState((prev) => {
+        const current = prev.schedule?.[role] || [];
+        const dayValue = Number(button.dataset.day);
+        const next = current.includes(dayValue)
+          ? current.filter((day) => day !== dayValue)
+          : [...current, dayValue];
+        setDayButtons(role, next);
+        return {
+          ...prev,
+          schedule: {
+            ...prev.schedule,
+            [role]: next,
+          },
+        };
+      });
+    });
   });
-
-  const getSelectedDays = (role) => {
-    const container = document.querySelector(`[data-day-role="${role}"]`);
-    if (!container) return [];
-    return Array.from(container.querySelectorAll(".day-button.selected")).map((btn) => Number(btn.dataset.day));
-  };
 
   scheduleModeSelect.addEventListener("change", updateScheduleVisibility);
   scheduleFrequencySelect.addEventListener("change", updateScheduleVisibility);
   secondRunToggle.addEventListener("change", updateScheduleVisibility);
   updateScheduleVisibility();
+  bindInput("customerId");
+  bindInput("storeName");
+  bindInput("contactName");
+  bindInput("phone");
+  bindInput("email");
+  bindInput("fullAddress");
+  bindInput("address1");
+  bindInput("suburb1");
+  bindInput("state1");
+  bindInput("postcode1");
+  bindInput("deliveryNotes");
+  bindInput("deliveryTerms");
+  bindInput("assignedRepId", { event: "change" });
+  bindInput("orderChannel", { event: "change" });
+  bindInput("averageOrderValue");
+  bindInput("customerNotes");
+  bindScheduleField("scheduleMode", "mode");
+  bindScheduleField("scheduleFrequency", "frequency");
+  bindScheduleField("scheduleAnchorDate", "anchorDate");
+  bindScheduleField("orderDay1", "orderDay1", (value) => (value ? Number(value) : null));
+  bindScheduleField("packDay1", "packDay1", (value) => (value ? Number(value) : null));
+  bindScheduleField("deliverDay1", "deliverDay1", (value) => (value ? Number(value) : null));
+  bindScheduleField("isBiWeeklySecondRun", "isBiWeeklySecondRun");
+  bindScheduleField("orderDay2", "orderDay2", (value) => (value ? Number(value) : null));
+  bindScheduleField("packDay2", "packDay2", (value) => (value ? Number(value) : null));
+  bindScheduleField("deliverDay2", "deliverDay2", (value) => (value ? Number(value) : null));
+  setDayButtons("customerOrderDays", formState.schedule?.customerOrderDays || []);
+  setDayButtons("packDays", formState.schedule?.packDays || []);
+  setDayButtons("deliverDays", formState.schedule?.deliverDays || []);
   setupCustomerPhotosSection(customer);
 
   let isSaving = false;
@@ -5097,44 +5225,46 @@ function openCustomerModal(customer = {}) {
       saveButton.disabled = true;
       saveButton.textContent = "Saving…";
     }
-    const formData = new FormData(event.target);
-    const address1 = formData.get("address1").trim();
-    const suburb1 = formData.get("suburb1").trim();
-    const state1 = formData.get("state1").trim();
-    const postcode1 = formData.get("postcode1").trim();
-    const fullAddressValue = formData.get("fullAddress").trim() || [address1, suburb1, state1, postcode1].filter(Boolean).join(", ");
-    const orderChannel = formData.get("orderChannel") || "portal";
-    const scheduleMode = formData.get("scheduleMode") || null;
-    const scheduleFrequency = formData.get("scheduleFrequency") || null;
-    const scheduleAnchorDate = formData.get("scheduleAnchorDate") || null;
-    if ((scheduleFrequency === "FORTNIGHTLY" || scheduleFrequency === "EVERY_3_WEEKS") && !scheduleAnchorDate) {
-      alert("Anchor date is required for fortnightly or every 3 weeks schedules.");
+    const resetSaveState = () => {
+      isSaving = false;
       if (saveButton) {
         saveButton.disabled = false;
         saveButton.textContent = originalSaveLabel;
       }
+    };
+    const address1 = formState.address1.trim();
+    const suburb1 = formState.suburb1.trim();
+    const state1 = formState.state1.trim();
+    const postcode1 = formState.postcode1.trim();
+    const fullAddressValue =
+      formState.fullAddress.trim() || [address1, suburb1, state1, postcode1].filter(Boolean).join(", ");
+    const orderChannel = formState.orderChannel || "portal";
+    const scheduleMode = formState.schedule.mode || null;
+    const scheduleFrequency = formState.schedule.frequency || null;
+    const scheduleAnchorDate = formState.schedule.anchorDate || null;
+    if ((scheduleFrequency === "FORTNIGHTLY" || scheduleFrequency === "EVERY_3_WEEKS") && !scheduleAnchorDate) {
+      alert("Anchor date is required for fortnightly or every 3 weeks schedules.");
+      resetSaveState();
       return;
     }
     const updated = {
       id: customer.id || createCustomerId(),
-      customerId: formData.get("customerId").trim(),
-      storeName: formData.get("storeName").trim(),
-      contactName: formData.get("contactName").trim(),
-      phone: formData.get("phone").trim(),
-      email: formData.get("email").trim(),
+      customerId: formState.customerId.trim(),
+      storeName: formState.storeName.trim(),
+      contactName: formState.contactName.trim(),
+      phone: formState.phone.trim(),
+      email: formState.email.trim(),
       fullAddress: fullAddressValue,
       address1,
       suburb1,
       state1,
       postcode1,
-      deliveryNotes: formData.get("deliveryNotes").trim(),
-      deliveryTerms: formData.get("deliveryTerms").trim(),
-      assignedRepId: formData.get("assignedRepId"),
+      deliveryNotes: formState.deliveryNotes.trim(),
+      deliveryTerms: formState.deliveryTerms.trim(),
+      assignedRepId: formState.assignedRepId,
       orderChannel,
       orderTermsLabel: orderTermsLabelFromChannel(orderChannel),
-      averageOrderValue: formData.get("averageOrderValue")
-        ? Number(formData.get("averageOrderValue"))
-        : null,
+      averageOrderValue: formState.averageOrderValue ? Number(formState.averageOrderValue) : null,
       packOffsetDays: customer.packOffsetDays ?? 0,
       deliveryOffsetDays: customer.deliveryOffsetDays ?? 1,
       cadenceType: customer.cadenceType ?? null,
@@ -5143,32 +5273,30 @@ function openCustomerModal(customer = {}) {
       cadenceEveryNDays: customer.cadenceEveryNDays || null,
       cadenceNextDueDate: customer.cadenceNextDueDate || null,
       autoAdvanceCadence: customer.autoAdvanceCadence || false,
-      customerNotes: formData.get("customerNotes").trim(),
+      customerNotes: formState.customerNotes.trim(),
       schedule: {
         mode: scheduleMode,
         frequency: scheduleFrequency,
-        orderDay1: formData.get("orderDay1") ? Number(formData.get("orderDay1")) : null,
-        deliverDay1: formData.get("deliverDay1") ? Number(formData.get("deliverDay1")) : null,
-        packDay1: formData.get("packDay1") ? Number(formData.get("packDay1")) : null,
-        isBiWeeklySecondRun: formData.get("isBiWeeklySecondRun") === "on",
-        orderDay2: formData.get("orderDay2") ? Number(formData.get("orderDay2")) : null,
-        deliverDay2: formData.get("deliverDay2") ? Number(formData.get("deliverDay2")) : null,
-        packDay2: formData.get("packDay2") ? Number(formData.get("packDay2")) : null,
-        customerOrderDays: getSelectedDays("customerOrderDays"),
-        deliverDays: getSelectedDays("deliverDays"),
-        packDays: getSelectedDays("packDays"),
+        orderDay1: formState.schedule.orderDay1 ?? null,
+        deliverDay1: formState.schedule.deliverDay1 ?? null,
+        packDay1: formState.schedule.packDay1 ?? null,
+        isBiWeeklySecondRun: formState.schedule.isBiWeeklySecondRun || false,
+        orderDay2: formState.schedule.orderDay2 ?? null,
+        deliverDay2: formState.schedule.deliverDay2 ?? null,
+        packDay2: formState.schedule.packDay2 ?? null,
+        customerOrderDays: formState.schedule.customerOrderDays || [],
+        deliverDays: formState.schedule.deliverDays || [],
+        packDays: formState.schedule.packDays || [],
         anchorDate: scheduleAnchorDate,
       },
       extraFields: customer.extraFields || {},
+      json: customer.json || {},
     };
     updated.schedule = normalizeSchedule(updated.schedule);
 
     if (!updated.storeName || !updated.fullAddress || !updated.assignedRepId) {
       alert("Store name, address, and assigned rep are required.");
-      if (saveButton) {
-        saveButton.disabled = false;
-        saveButton.textContent = originalSaveLabel;
-      }
+      resetSaveState();
       return;
     }
 
@@ -5201,11 +5329,7 @@ function openCustomerModal(customer = {}) {
         (typeof error?.message === "string" && error.message.toLowerCase().includes("permission denied"));
       showSnackbar(isRlsError ? "Save failed due to permissions (RLS)." : error?.message || "Unable to save customer.");
     } finally {
-      isSaving = false;
-      if (saveButton) {
-        saveButton.disabled = false;
-        saveButton.textContent = originalSaveLabel;
-      }
+      resetSaveState();
     }
   });
 }
