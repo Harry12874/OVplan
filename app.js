@@ -2046,32 +2046,32 @@ async function loadFromSupabase() {
 async function syncUpsertCustomer(customer, { mode } = {}) {
   const payload = mapCustomerToSupabase(customer);
   const userId = state.session?.user?.id;
+  if (!state.session || !userId) {
+    console.warn("Customer save blocked: missing session.");
+    showSnackbar("Sign in to save customers.");
+    throw new Error("Missing session");
+  }
   if (BUILD_ID === "dev") {
     console.log("Customer payload", payload);
   }
   setCloudStatus("syncing");
-  let data;
-  let error;
-  if (mode === "insert") {
-    ({ data, error } = await supabase.from("customers").insert(payload).select("*").single());
-  } else {
-    const updatePayload = { ...payload };
-    let query = supabase.from("customers").update(updatePayload).eq("id", customer.id);
-    if (userId) {
-      query = query.eq("user_id", userId);
+  const payloadWithUser = userId ? { ...payload, user_id: userId } : payload;
+  const { data, error } = await supabase.from("customers").upsert(payloadWithUser).select().single();
+  if (error) {
+    const isRlsError =
+      error?.code === "42501" || (typeof error?.message === "string" && error.message.toLowerCase().includes("permission denied"));
+    if (isRlsError) {
+      error.isRls = true;
     }
-    ({ data, error } = await query.select("*").maybeSingle());
-    if (!error && !data && userId) {
-      const fallbackPayload = { ...updatePayload, user_id: userId };
-      ({ data, error } = await supabase
-        .from("customers")
-        .update(fallbackPayload)
-        .eq("id", customer.id)
-        .select("*")
-        .maybeSingle());
-    }
+    console.error("Supabase customer upsert failed", {
+      message: error?.message,
+      details: error?.details,
+      hint: error?.hint,
+      code: error?.code,
+      mode,
+    });
+    throw error;
   }
-  if (error) throw error;
   if (!data) {
     throw new Error("Customer update failed. Record not found.");
   }
@@ -4631,97 +4631,111 @@ function setupCustomerPhotosSection(customer) {
     });
   }
 
+  const handlePhotoSubmit = async () => {
+    if (!canEdit) {
+      console.error("Customer photo upload blocked: insufficient permissions.");
+      setFormError("You don’t have permission to upload photos.");
+      return;
+    }
+    if (isUploading) {
+      return;
+    }
+    if (formStatus) formStatus.textContent = "";
+    if (fileError) fileError.textContent = "";
+    formError = "";
+    const mode = form?.dataset.mode || "add";
+    const photoId = form?.dataset.photoId || "";
+    const caption = captionField.value.trim();
+    const storeLocation = locationField.value.trim();
+    setFormBusy(true);
+    try {
+      if (!customer.id) {
+        console.error("Customer photo upload failed: missing customer id.");
+        setFormError("Missing customer id.");
+        return;
+      }
+      if (mode === "add") {
+        const file = fileField.files?.[0];
+        console.log("Customer photo upload clicked.", {
+          customerId: customer.id,
+          fileName: file?.name || "",
+          caption,
+          store_location: storeLocation,
+        });
+        if (!file) {
+          console.error("Customer photo upload failed: no file selected.");
+          setFormError("Please choose a photo file.", { fileOnly: true });
+          return;
+        }
+        const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
+        if (file.type && !allowedTypes.includes(file.type)) {
+          console.error("Customer photo upload failed: unsupported file type.", file.type);
+          setFormError("Unsupported file type. Use JPG, PNG, or WebP.", { fileOnly: true });
+          return;
+        }
+        if (file.size > 10 * 1024 * 1024) {
+          console.error("Customer photo upload failed: file too large.", file.size);
+          setFormError("File must be under 10MB.", { fileOnly: true });
+          return;
+        }
+        formStatus.textContent = "Uploading photo…";
+        await uploadCustomerPhoto({
+          customerId: customer.id,
+          file,
+          caption,
+          store_location: storeLocation,
+        });
+        state.customerPhotos[customer.id] = await getCustomerPhotos(customer.id);
+        renderCustomerPhotos(customer.id, canEdit);
+        showSnackbar("Photo uploaded.");
+        if (form?.tagName === "FORM") {
+          form.reset();
+        }
+        captionField.value = "";
+        locationField.value = "";
+        fileField.value = "";
+        setFormMode("add");
+        updateDebugLine();
+        return;
+      }
+      if (!photoId) {
+        console.error("Customer photo update failed: missing photo id.");
+        setFormError("Missing photo id.");
+        return;
+      }
+      formStatus.textContent = "Saving changes…";
+      await updateCustomerPhoto({ id: photoId, caption, store_location: storeLocation });
+      state.customerPhotos[customer.id] = await getCustomerPhotos(customer.id);
+      renderCustomerPhotos(customer.id, canEdit);
+      showSnackbar("Photo updated.");
+    } catch (error) {
+      console.error("Customer photo submit failed.", error);
+      const message =
+        mode === "add"
+          ? error?.message || "Upload failed. Please try again."
+          : error?.message || "Unable to save changes.";
+      setFormError(message);
+    } finally {
+      setFormBusy(false);
+    }
+  };
+
   if (form) {
     form.addEventListener("click", (event) => {
       event.stopPropagation();
     });
-    form.addEventListener("submit", async (event) => {
+    form.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+      }
+    });
+  }
+
+  if (submitButton) {
+    submitButton.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (!canEdit) {
-        console.error("Customer photo upload blocked: insufficient permissions.");
-        setFormError("You don’t have permission to upload photos.");
-        return;
-      }
-      if (isUploading) {
-        return;
-      }
-      if (formStatus) formStatus.textContent = "";
-      if (fileError) fileError.textContent = "";
-      formError = "";
-      const mode = form.dataset.mode || "add";
-      const photoId = form.dataset.photoId || "";
-      const caption = captionField.value.trim();
-      const storeLocation = locationField.value.trim();
-      setFormBusy(true);
-      try {
-        if (!customer.id) {
-          console.error("Customer photo upload failed: missing customer id.");
-          setFormError("Missing customer id.");
-          return;
-        }
-        if (mode === "add") {
-          const file = fileField.files?.[0];
-          console.log("Customer photo upload clicked.", {
-            customerId: customer.id,
-            fileName: file?.name || "",
-            caption,
-            store_location: storeLocation,
-          });
-          if (!file) {
-            console.error("Customer photo upload failed: no file selected.");
-            setFormError("Please choose a photo file.", { fileOnly: true });
-            return;
-          }
-          const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
-          if (file.type && !allowedTypes.includes(file.type)) {
-            console.error("Customer photo upload failed: unsupported file type.", file.type);
-            setFormError("Unsupported file type. Use JPG, PNG, or WebP.", { fileOnly: true });
-            return;
-          }
-          if (file.size > 10 * 1024 * 1024) {
-            console.error("Customer photo upload failed: file too large.", file.size);
-            setFormError("File must be under 10MB.", { fileOnly: true });
-            return;
-          }
-          formStatus.textContent = "Uploading photo…";
-          await uploadCustomerPhoto({
-            customerId: customer.id,
-            file,
-            caption,
-            store_location: storeLocation,
-          });
-          state.customerPhotos[customer.id] = await getCustomerPhotos(customer.id);
-          renderCustomerPhotos(customer.id, canEdit);
-          showSnackbar("Photo uploaded.");
-          form.reset();
-          captionField.value = "";
-          locationField.value = "";
-          fileField.value = "";
-          setFormMode("add");
-          updateDebugLine();
-          return;
-        }
-        if (!photoId) {
-          console.error("Customer photo update failed: missing photo id.");
-          setFormError("Missing photo id.");
-          return;
-        }
-        formStatus.textContent = "Saving changes…";
-        await updateCustomerPhoto({ id: photoId, caption, store_location: storeLocation });
-        state.customerPhotos[customer.id] = await getCustomerPhotos(customer.id);
-        renderCustomerPhotos(customer.id, canEdit);
-        showSnackbar("Photo updated.");
-      } catch (error) {
-        console.error("Customer photo submit failed.", error);
-        const message =
-          mode === "add"
-            ? error?.message || "Upload failed. Please try again."
-            : error?.message || "Unable to save changes.";
-        setFormError(message);
-      } finally {
-        setFormBusy(false);
-      }
+      handlePhotoSubmit();
     });
   }
 
@@ -4989,7 +5003,7 @@ function openCustomerModal(customer = {}) {
           ${canEditPhotos ? `<button class="secondary" type="button" id="customerPhotoAddBtn">Add Photo</button>` : ""}
         </div>
         <p class="muted" id="customerPhotosStatus"></p>
-        <form id="customerPhotoForm" class="form photo-form hidden">
+        <div id="customerPhotoForm" class="form photo-form hidden" role="form">
           <h4 id="customerPhotoFormTitle">Add a photo</h4>
           <label id="customerPhotoFileWrap">Photo file
             <input id="customerPhotoFile" name="photoFile" type="file" accept="image/jpeg,image/png,image/webp" />
@@ -5004,10 +5018,10 @@ function openCustomerModal(customer = {}) {
           <div id="customerPhotoFormStatus" class="muted"></div>
           <div class="form-actions">
             <button class="secondary" type="button" id="customerPhotoCancel">Cancel</button>
-            <button class="primary" type="submit" id="customerPhotoSubmit">Upload photo</button>
+            <button class="primary" type="button" id="customerPhotoSubmit">Upload photo</button>
           </div>
           <div id="customerPhotoDebug" class="muted photo-debug hidden"></div>
-        </form>
+        </div>
         <div id="customerPhotosGrid" class="photo-grid"></div>
         <p id="customerPhotosEmpty" class="muted"></p>
       </div>
@@ -5067,15 +5081,19 @@ function openCustomerModal(customer = {}) {
   updateScheduleVisibility();
   setupCustomerPhotosSection(customer);
 
+  let isSaving = false;
   document.getElementById("customerForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    console.log("SAVE CLICKED", customer.id || "new");
     if (!canWrite()) {
       showOfflineAlert();
       return;
     }
+    if (isSaving) return;
     const saveButton = event.target.querySelector("button[type='submit']");
     const originalSaveLabel = saveButton?.textContent || "Save";
     if (saveButton) {
+      isSaving = true;
       saveButton.disabled = true;
       saveButton.textContent = "Saving…";
     }
@@ -5170,10 +5188,20 @@ function openCustomerModal(customer = {}) {
       closeModal();
       renderAll();
     } catch (error) {
-      console.error("Supabase upsert failed", error);
+      console.error("Supabase upsert failed", {
+        message: error?.message,
+        details: error?.details,
+        hint: error?.hint,
+        code: error?.code,
+      });
       handleSupabaseError(error, { context: "Supabase upsert failed", alertOnOffline: true });
-      showSnackbar(error?.message || "Unable to save customer.");
+      const isRlsError =
+        error?.isRls ||
+        error?.code === "42501" ||
+        (typeof error?.message === "string" && error.message.toLowerCase().includes("permission denied"));
+      showSnackbar(isRlsError ? "Save failed due to permissions (RLS)." : error?.message || "Unable to save customer.");
     } finally {
+      isSaving = false;
       if (saveButton) {
         saveButton.disabled = false;
         saveButton.textContent = originalSaveLabel;
