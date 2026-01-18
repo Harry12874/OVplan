@@ -1,0 +1,12 @@
+{
+  "name": "ov-planner",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint \"**/*.{js,mjs}\"",
+    "build": "npm run lint"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0"
+  }
+}
