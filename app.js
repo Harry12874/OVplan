@@ -699,6 +699,11 @@ const customerCsvImportState = {
   errors: [],
   headerErrors: [],
   parseErrors: [],
+  stage: null,
+  isImporting: false,
+  importFailures: [],
+  resultsMessage: "",
+  importError: null,
 };
 
 let lastUndo = null;
@@ -1983,19 +1988,23 @@ async function loadFromSupabase() {
   if (!state.session) return;
   setCloudStatus("syncing");
   try {
-    const { data: customersData, error: customersError } = await supabase
-      .from("customers")
-      .select("*")
-      .eq("user_id", state.session.user.id);
+    const { data: customersData, error: customersError } = await withTimeout(
+      supabase.from("customers").select("*").eq("user_id", state.session.user.id),
+      SUPABASE_TIMEOUT_MS,
+      "Supabase customers fetch timed out."
+    );
     if (customersError) throw customersError;
-    const { data: eventsData, error: eventsError } = await supabase
-      .from("schedule_events")
-      .select("id,data_json")
-      .eq("user_id", state.session.user.id);
+    const { data: eventsData, error: eventsError } = await withTimeout(
+      supabase.from("schedule_events").select("id,data_json").eq("user_id", state.session.user.id),
+      SUPABASE_TIMEOUT_MS,
+      "Supabase schedule events fetch timed out."
+    );
     if (eventsError) throw eventsError;
-    const { data: notesData, error: notesError } = await supabase
-      .from("sticky_notes")
-      .select("*");
+    const { data: notesData, error: notesError } = await withTimeout(
+      supabase.from("sticky_notes").select("*"),
+      SUPABASE_TIMEOUT_MS,
+      "Supabase sticky notes fetch timed out."
+    );
     if (notesError) throw notesError;
     const customers = (customersData || []).map((row) => {
       const customer = mapCustomerFromSupabase(row);
@@ -2026,6 +2035,9 @@ async function loadFromSupabase() {
   } catch (error) {
     console.error("Supabase sync failed", error);
     handleSupabaseError(error, { context: "Supabase sync failed", alertOnOffline: false });
+    if (state.connection.cloudStatus === "syncing") {
+      setCloudStatus("offline");
+    }
     if (isNetworkFailure(error)) {
       return { status: "network" };
     }
@@ -3771,7 +3783,32 @@ function normalizeOrderChannel(value) {
   return map[normalized] || "portal";
 }
 
-const customerCsvRequiredHeaders = ["store_name", "address"];
+const SUPABASE_TIMEOUT_MS = 20000;
+
+function withTimeout(promise, ms, message) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(message));
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId);
+  });
+}
+
+const customerCsvAllowedHeaders = [
+  "store_name",
+  "address",
+  "suburb",
+  "state",
+  "postcode",
+  "phone",
+  "email",
+  "contact_name",
+  "order_source",
+];
+const customerCsvRequiredHeaders = [...customerCsvAllowedHeaders];
 const customerCsvEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function normalizeCustomerCsvHeader(header) {
@@ -3785,6 +3822,11 @@ function resetCustomerCsvImportState() {
   customerCsvImportState.errors = [];
   customerCsvImportState.headerErrors = [];
   customerCsvImportState.parseErrors = [];
+  customerCsvImportState.stage = null;
+  customerCsvImportState.isImporting = false;
+  customerCsvImportState.importFailures = [];
+  customerCsvImportState.resultsMessage = "";
+  customerCsvImportState.importError = null;
 }
 
 function sanitizeCsvValue(value) {
@@ -3792,11 +3834,36 @@ function sanitizeCsvValue(value) {
   return String(value).trim();
 }
 
+function setCustomerCsvImportStage(stage, resultsEl) {
+  customerCsvImportState.stage = stage;
+  if (resultsEl) {
+    resultsEl.textContent = stage || "";
+  }
+}
+
+function setCustomerCsvImportMessage(message, resultsEl) {
+  customerCsvImportState.resultsMessage = message || "";
+  if (resultsEl && message) {
+    resultsEl.textContent = message;
+  }
+}
+
+function getImportErrorMessage(error) {
+  if (!error) return "Unknown error.";
+  if (typeof error === "string") return error;
+  return error.message || error.error_description || "Unexpected error.";
+}
+
+function isCustomerCsvRowEmpty(row) {
+  if (!row) return true;
+  return customerCsvAllowedHeaders.every((header) => !sanitizeCsvValue(row[header]));
+}
+
 function buildCustomerCsvRecord(row, index) {
   const storeName = sanitizeCsvValue(row.store_name);
   const address = sanitizeCsvValue(row.address);
   const suburb = sanitizeCsvValue(row.suburb);
-  const stateValue = sanitizeCsvValue(row.state);
+  const stateValue = sanitizeCsvValue(row.state).toUpperCase();
   const postcode = sanitizeCsvValue(row.postcode);
   const phone = sanitizeCsvValue(row.phone);
   const email = sanitizeCsvValue(row.email);
@@ -3806,6 +3873,13 @@ function buildCustomerCsvRecord(row, index) {
   const errors = [];
   if (!storeName) errors.push("Missing store_name.");
   if (!address) errors.push("Missing address.");
+  if (!suburb) errors.push("Missing suburb.");
+  if (!stateValue) errors.push("Missing state.");
+  if (!postcode) {
+    errors.push("Missing postcode.");
+  } else if (!/^\d{4}$/.test(postcode)) {
+    errors.push("Postcode must be 4 digits.");
+  }
   if (email && !customerCsvEmailPattern.test(email)) errors.push("Invalid email.");
 
   return {
@@ -3830,7 +3904,20 @@ function renderCustomerCsvModal() {
   const errorRows = customerCsvImportState.errors || [];
   const headerErrors = customerCsvImportState.headerErrors || [];
   const parseErrors = customerCsvImportState.parseErrors || [];
-  const hasErrors = headerErrors.length || parseErrors.length || errorRows.length;
+  const stage = customerCsvImportState.stage;
+  const resultsMessage = customerCsvImportState.resultsMessage;
+  const importError = customerCsvImportState.importError;
+  const importFailures = customerCsvImportState.importFailures || [];
+  const hasErrors = headerErrors.length || parseErrors.length;
+  const failureList =
+    importFailures.length > 0
+      ? importFailures
+          .slice(0, 10)
+          .map((item) => `<li>Row ${item.index + 1}: ${item.errors.join(" ")}</li>`)
+          .join("")
+      : "";
+  const failureNote =
+    importFailures.length > 10 ? `<p class="muted">Showing first 10 import failures.</p>` : "";
 
   const errorItems = [
     ...headerErrors.map((message) => `<li>${message}</li>`),
@@ -3901,10 +3988,21 @@ function renderCustomerCsvModal() {
     <div class="card">
       <h3>Errors</h3>
       ${errorItems ? `<ul class="muted">${errorItems}</ul>${errorNote}` : "<p class=\"muted\">No errors in preview.</p>"}
-      <div id="csvImportResults" class="muted"></div>
+      ${importError ? `<p class="muted">Import failed: ${importError}</p>` : ""}
+      ${
+        failureList
+          ? `<p class="muted">Import failures:</p><ul class="muted">${failureList}</ul>${failureNote}`
+          : ""
+      }
+      <div id="csvImportResults" class="muted">${stage || resultsMessage || ""}</div>
     </div>
     <div class="form-actions">
       <button class="secondary" type="button" id="csvImportCancel">Cancel</button>
+      ${
+        importError
+          ? '<button class="secondary" type="button" id="csvImportResetBtn">Reset import state</button>'
+          : ""
+      }
       <button class="primary" type="button" id="csvImportRunBtn" data-requires-online="true" ${hasErrors || !totalRows ? "disabled" : ""}>Import</button>
     </div>
   `);
@@ -3921,6 +4019,13 @@ function renderCustomerCsvModal() {
   if (importBtn) {
     importBtn.addEventListener("click", handleCustomerCsvImport);
   }
+  const resetBtn = document.getElementById("csvImportResetBtn");
+  if (resetBtn) {
+    resetBtn.addEventListener("click", () => {
+      resetCustomerCsvImportState();
+      renderCustomerCsvModal();
+    });
+  }
 }
 
 async function handleCustomerCsvFileChange(event) {
@@ -3931,6 +4036,12 @@ async function handleCustomerCsvFileChange(event) {
     return;
   }
 
+  const resultsEl = document.getElementById("csvImportResults");
+  setCustomerCsvImportStage("Parsing CSV…", resultsEl);
+  customerCsvImportState.importError = null;
+  customerCsvImportState.resultsMessage = "";
+  customerCsvImportState.importFailures = [];
+
   const text = await file.text();
   const parsed = window.Papa.parse(text, {
     header: true,
@@ -3939,32 +4050,52 @@ async function handleCustomerCsvFileChange(event) {
     transform: (value) => (typeof value === "string" ? value.trim() : value),
   });
 
+  setCustomerCsvImportStage("Validating…", resultsEl);
   customerCsvImportState.fileName = file.name;
-  customerCsvImportState.headers = parsed.meta?.fields || [];
+  customerCsvImportState.headers = (parsed.meta?.fields || []).map((header) => normalizeCustomerCsvHeader(header));
   customerCsvImportState.parseErrors = (parsed.errors || [])
     .map((error) => error?.message || error?.type || "CSV parse error.")
     .filter(Boolean);
-  customerCsvImportState.headerErrors = customerCsvRequiredHeaders
-    .filter((header) => !customerCsvImportState.headers.includes(header))
-    .map((header) => `Missing required header: ${header}.`);
-  customerCsvImportState.records = (parsed.data || []).map((row, index) => buildCustomerCsvRecord(row, index));
+  const headerSet = new Set(customerCsvImportState.headers);
+  const duplicateHeaders = customerCsvImportState.headers.filter(
+    (header, index) => header && customerCsvImportState.headers.indexOf(header) !== index
+  );
+  const missingHeaders = customerCsvRequiredHeaders.filter((header) => !headerSet.has(header));
+  const unexpectedHeaders = customerCsvImportState.headers.filter(
+    (header) => header && !customerCsvAllowedHeaders.includes(header)
+  );
+  customerCsvImportState.headerErrors = [
+    ...missingHeaders.map((header) => `Missing required header: ${header}.`),
+    ...unexpectedHeaders.map((header) => `Unexpected header: ${header}.`),
+    ...duplicateHeaders.map((header) => `Duplicate header: ${header}.`),
+  ];
+  customerCsvImportState.records = (parsed.data || []).reduce((acc, row, index) => {
+    if (isCustomerCsvRowEmpty(row)) return acc;
+    acc.push(buildCustomerCsvRecord(row, index));
+    return acc;
+  }, []);
   customerCsvImportState.errors = customerCsvImportState.records
     .filter((record) => record.errors.length)
     .map((record) => ({ index: record.index, errors: record.errors }));
+  setCustomerCsvImportStage(null, resultsEl);
 
   renderCustomerCsvModal();
   event.target.value = "";
 }
 
 async function upsertCustomerCsvBatch(records, onConflict, resultsEl) {
-  const chunkSize = 200;
+  const chunkSize = 100;
+  const totalChunks = Math.ceil(records.length / chunkSize);
   for (let start = 0; start < records.length; start += chunkSize) {
     const chunk = records.slice(start, start + chunkSize);
     if (!chunk.length) continue;
-    if (resultsEl) {
-      resultsEl.textContent = `Syncing ${Math.min(start + chunk.length, records.length)}/${records.length} customers…`;
-    }
-    const { error } = await supabase.from("customers").upsert(chunk, { onConflict });
+    const chunkIndex = Math.floor(start / chunkSize) + 1;
+    setCustomerCsvImportStage(`Uploading chunk ${chunkIndex}/${totalChunks}…`, resultsEl);
+    const { error } = await withTimeout(
+      supabase.from("customers").upsert(chunk, { onConflict }),
+      SUPABASE_TIMEOUT_MS,
+      "Supabase upsert timed out."
+    );
     if (error) throw error;
   }
 }
@@ -3978,12 +4109,16 @@ async function handleCustomerCsvImport() {
     showSnackbar("Sign in to import customers.");
     return;
   }
+  if (customerCsvImportState.isImporting) {
+    showSnackbar("Import already in progress.");
+    return;
+  }
   if (!customerCsvImportState.records.length) {
     alert("No CSV rows loaded.");
     return;
   }
-  if (customerCsvImportState.headerErrors.length || customerCsvImportState.errors.length) {
-    alert("Fix CSV errors before importing.");
+  if (customerCsvImportState.headerErrors.length || customerCsvImportState.parseErrors.length) {
+    alert("Fix CSV header/parse errors before importing.");
     return;
   }
   const userId = getCurrentUserId();
@@ -3993,13 +4128,19 @@ async function handleCustomerCsvImport() {
   }
 
   const resultsEl = document.getElementById("csvImportResults");
-  if (resultsEl) {
-    resultsEl.textContent = "Importing customers…";
-  }
+  customerCsvImportState.isImporting = true;
+  customerCsvImportState.importError = null;
+  customerCsvImportState.importFailures = [];
+  customerCsvImportState.resultsMessage = "";
+  setCustomerCsvImportStage("Uploading customers…", resultsEl);
 
-  const payloads = customerCsvImportState.records
-    .filter((record) => !record.errors.length)
-    .map((record) => ({
+  const importFailures = [];
+  const payloads = customerCsvImportState.records.reduce((acc, record) => {
+    if (record.errors.length) {
+      importFailures.push({ index: record.index, errors: record.errors });
+      return acc;
+    }
+    acc.push({
       user_id: userId,
       store_name: record.store_name,
       address: record.address,
@@ -4009,24 +4150,35 @@ async function handleCustomerCsvImport() {
       phone: record.phone || null,
       email: record.email || null,
       contact_name: record.contact_name || null,
-      order_source: record.order_source || null,
+      order_source: record.order_source ? normalizeOrderChannel(record.order_source) : null,
       updated_at: new Date().toISOString(),
-    }));
+    });
+    return acc;
+  }, []);
 
   const withEmail = payloads.filter((row) => row.email);
   const noEmail = payloads.filter((row) => !row.email);
 
+  let successCount = 0;
   try {
+    if (!payloads.length) {
+      throw new Error("No valid rows to import.");
+    }
+    setCloudStatus("syncing");
     if (withEmail.length) {
       await upsertCustomerCsvBatch(withEmail, "user_id,email", resultsEl);
+      successCount += withEmail.length;
     }
     if (noEmail.length) {
-      await upsertCustomerCsvBatch(noEmail, "user_id,store_name,address", resultsEl);
+      await upsertCustomerCsvBatch(noEmail, "user_id,store_name,address,suburb,state,postcode", resultsEl);
+      successCount += noEmail.length;
     }
-    if (resultsEl) {
-      resultsEl.textContent = `Imported ${payloads.length} customers.`;
-    }
-    const loadResult = await loadFromSupabase();
+    setCustomerCsvImportStage("Refreshing…", resultsEl);
+    const loadResult = await withTimeout(
+      loadFromSupabase(),
+      SUPABASE_TIMEOUT_MS,
+      "Supabase refresh timed out."
+    );
     if (loadResult?.status === "error") {
       await loadState({
         useLocalCustomers: false,
@@ -4037,12 +4189,42 @@ async function handleCustomerCsvImport() {
       await loadState({ stickyNotesUserId: state.session?.user?.id || null });
     }
     renderAll();
-    showSnackbar(`Imported ${payloads.length} customers.`);
+    setCloudStatus("synced", toISO());
+    const failureCount = importFailures.length;
+    if (failureCount) {
+      const failureSummary = importFailures
+        .slice(0, 10)
+        .map((item) => `Row ${item.index + 1}: ${item.errors.join(" ")}`)
+        .join(" ");
+      setCustomerCsvImportMessage(`Imported ${successCount}, failed ${failureCount}.`, resultsEl);
+      showSnackbar(
+        `Imported ${successCount}, failed ${failureCount}. ${failureSummary || ""}`.trim()
+      );
+      customerCsvImportState.importFailures = importFailures;
+    } else {
+      setCustomerCsvImportMessage(`Imported ${successCount} customers.`, resultsEl);
+      showSnackbar(`Imported ${successCount} customers.`);
+    }
+    setCustomerCsvImportStage("Done", resultsEl);
+    renderCustomerCsvModal();
   } catch (error) {
     console.error("Supabase upsert failed", error);
     handleSupabaseError(error, { context: "Supabase import failed", alertOnOffline: true });
-    if (resultsEl) {
-      resultsEl.textContent = "Supabase import failed. Check your connection and try again.";
+    const message = getImportErrorMessage(error);
+    customerCsvImportState.importError = message;
+    customerCsvImportState.importFailures = importFailures;
+    setCustomerCsvImportMessage(`Import failed: ${message}`, resultsEl);
+    showSnackbar(`Import failed: ${message}`);
+    customerCsvImportState.stage = null;
+    if (state.connection.cloudStatus === "syncing") {
+      setCloudStatus("offline");
+    }
+    renderCustomerCsvModal();
+  } finally {
+    customerCsvImportState.isImporting = false;
+    customerCsvImportState.stage = null;
+    if (state.connection.cloudStatus === "syncing") {
+      setCloudStatus("offline");
     }
   }
 }
