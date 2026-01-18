@@ -2060,9 +2060,21 @@ async function syncUpsertCustomer(customer, { mode } = {}) {
     if (userId) {
       query = query.eq("user_id", userId);
     }
-    ({ data, error } = await query.select("*").single());
+    ({ data, error } = await query.select("*").maybeSingle());
+    if (!error && !data && userId) {
+      const fallbackPayload = { ...updatePayload, user_id: userId };
+      ({ data, error } = await supabase
+        .from("customers")
+        .update(fallbackPayload)
+        .eq("id", customer.id)
+        .select("*")
+        .maybeSingle());
+    }
   }
   if (error) throw error;
+  if (!data) {
+    throw new Error("Customer update failed. Record not found.");
+  }
   if (BUILD_ID === "dev") {
     console.log("Customer row saved", data);
   }
