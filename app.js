@@ -1861,14 +1861,12 @@ function resolveCustomerRepName(customer) {
 
 function mapCustomerToSupabase(customer) {
   const schedule = normalizeSchedule(customer.schedule || {});
-  const userId = getCurrentUserId();
   const orderSource = normalizeOrderChannel(
     customer.orderSource || customer.orderChannel || customer.channelPreference || "portal"
   );
   const extraFieldsJson = buildExtraFieldsJson(customer.extraFields, customer.extraFieldsJson);
   const payload = {
     id: customer.id,
-    user_id: userId,
     store_name: customer.storeName || "",
     address: customer.fullAddress || "",
     suburb: customer.suburb1 || "",
@@ -1989,7 +1987,7 @@ async function loadFromSupabase() {
   setCloudStatus("syncing");
   try {
     const { data: customersData, error: customersError } = await withTimeout(
-      supabase.from("customers").select("*").eq("user_id", state.session.user.id),
+      supabase.from("customers").select("*"),
       SUPABASE_TIMEOUT_MS,
       "Supabase customers fetch timed out."
     );
@@ -4121,12 +4119,6 @@ async function handleCustomerCsvImport() {
     alert("Fix CSV header/parse errors before importing.");
     return;
   }
-  const userId = getCurrentUserId();
-  if (!userId) {
-    showSnackbar("Not logged in.");
-    return;
-  }
-
   const resultsEl = document.getElementById("csvImportResults");
   customerCsvImportState.isImporting = true;
   customerCsvImportState.importError = null;
@@ -4141,7 +4133,6 @@ async function handleCustomerCsvImport() {
       return acc;
     }
     acc.push({
-      user_id: userId,
       store_name: record.store_name,
       address: record.address,
       suburb: record.suburb || null,
@@ -4156,23 +4147,14 @@ async function handleCustomerCsvImport() {
     return acc;
   }, []);
 
-  const withEmail = payloads.filter((row) => row.email);
-  const noEmail = payloads.filter((row) => !row.email);
-
   let successCount = 0;
   try {
     if (!payloads.length) {
       throw new Error("No valid rows to import.");
     }
     setCloudStatus("syncing");
-    if (withEmail.length) {
-      await upsertCustomerCsvBatch(withEmail, "user_id,email", resultsEl);
-      successCount += withEmail.length;
-    }
-    if (noEmail.length) {
-      await upsertCustomerCsvBatch(noEmail, "user_id,store_name,address,suburb,state,postcode", resultsEl);
-      successCount += noEmail.length;
-    }
+    await upsertCustomerCsvBatch(payloads, "store_name,address,suburb,state,postcode", resultsEl);
+    successCount += payloads.length;
     setCustomerCsvImportStage("Refreshing…", resultsEl);
     const loadResult = await withTimeout(
       loadFromSupabase(),
