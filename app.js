@@ -1906,9 +1906,13 @@ function mapCustomerFromSupabase(row) {
     orderDay2: scheduling.order_day_2 ?? scheduling.orderDay2 ?? null,
     packDay2: scheduling.pack_day_2 ?? scheduling.packDay2 ?? null,
     deliverDay2: scheduling.delivery_day_2 ?? scheduling.deliverDay2 ?? null,
-    customerOrderDays: normalizeDayArray(scheduling.order_days ?? scheduling.customerOrderDays ?? row?.order_days || []),
-    deliverDays: normalizeDayArray(scheduling.delivery_days ?? scheduling.deliverDays ?? row?.delivery_days || []),
-    packDays: normalizeDayArray(scheduling.packing_days ?? scheduling.packDays ?? row?.packing_days || []),
+    customerOrderDays: normalizeDayArray(
+      scheduling.order_days ?? scheduling.customerOrderDays ?? row?.order_days ?? []
+    ),
+    deliverDays: normalizeDayArray(
+      scheduling.delivery_days ?? scheduling.deliverDays ?? row?.delivery_days ?? []
+    ),
+    packDays: normalizeDayArray(scheduling.packing_days ?? scheduling.packDays ?? row?.packing_days ?? []),
   });
   const repNameValue = row?.rep_name ?? "";
   const repIdFromName = repNameValue
