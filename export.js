@@ -2,6 +2,7 @@ const defaultColumns = [
   { header: "stop_name", field: "task.title" },
   { header: "address", field: "customer.fullAddress" },
   { header: "notes", field: "customer.deliveryNotes" },
+  { header: "type", field: "task.eventType" },
   { header: "phone", field: "customer.phone" },
   { header: "email", field: "customer.email" },
   { header: "rep_name", field: "rep.name" },
@@ -16,6 +17,7 @@ const fieldOptions = [
   { label: "Store name", value: "customer.storeName" },
   { label: "Address", value: "customer.fullAddress" },
   { label: "Delivery notes", value: "customer.deliveryNotes" },
+  { label: "Order/delivery type", value: "task.eventType" },
   { label: "Customer phone", value: "customer.phone" },
   { label: "Customer email", value: "customer.email" },
   { label: "Rep name", value: "rep.name" },
@@ -87,7 +89,7 @@ function normalizeOrderTaskType(taskType) {
 }
 
 function buildTaskTitle({ kind, customer, order }) {
-  const baseLabel = kind === "pickup" ? "PICKUP" : "DELIVERY";
+  const baseLabel = kind === "pickup" ? "PICKUP" : kind === "order" ? "ORDER" : "DELIVERY";
   const name =
     kind === "pickup"
       ? order?.supplierName || order?.reference || customer?.storeName
@@ -131,6 +133,7 @@ function buildSpokenitExportRecords({
       task: {
         ...task,
         type: "delivery",
+        eventType: "delivery",
         title: buildTaskTitle({ kind: "delivery", customer, order }),
       },
       order,
@@ -139,26 +142,25 @@ function buildSpokenitExportRecords({
     };
   });
 
-  const deliveryOrderIds = new Set(deliveryRecords.map((record) => record.order?.id).filter(Boolean));
-
-  const pickupRecords = orders
-    .filter((order) => normalizeOrderTaskType(order.taskType) === "pickup")
+  const orderRecords = orders
     .filter((order) => {
       if (!includeCompleted && order.status === "delivered") return false;
       if (order.deliveryDueDate < start || order.deliveryDueDate > end) return false;
       if (repFilter !== "all" && order.assignedRepId !== repFilter) return false;
-      if (deliveryOrderIds.has(order.id)) return false;
       return true;
     })
     .map((order) => {
       const customer = customerMap.get(order.customerId) || {};
       const rep = repMap.get(order.assignedRepId) || {};
+      const normalizedTaskType = normalizeOrderTaskType(order.taskType);
+      const titleKind = normalizedTaskType === "pickup" ? "pickup" : "order";
       return {
         task: {
-          type: "pickup",
+          type: "order",
+          eventType: "order",
           dueDate: order.deliveryDueDate,
           assignedRepId: order.assignedRepId,
-          title: buildTaskTitle({ kind: "pickup", customer, order }),
+          title: buildTaskTitle({ kind: titleKind, customer, order }),
         },
         order,
         customer,
@@ -166,7 +168,7 @@ function buildSpokenitExportRecords({
       };
     });
 
-  return [...deliveryRecords, ...pickupRecords];
+  return [...deliveryRecords, ...orderRecords];
 }
 
 export {

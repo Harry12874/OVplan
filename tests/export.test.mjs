@@ -64,9 +64,11 @@ function runExport({
     ],
   });
 
-  assert.equal(records.length, 1);
-  assert.equal(records[0].task.type, "delivery");
-  assert.equal(records[0].task.title, "DELIVERY: Fresh Market - Richmond VIC 3121");
+  assert.equal(records.length, 2);
+  assert.ok(records.some((record) => record.task.eventType === "delivery"));
+  assert.ok(records.some((record) => record.task.eventType === "order"));
+  assert.ok(records.some((record) => record.task.title === "DELIVERY: Fresh Market - Richmond VIC 3121"));
+  assert.ok(records.some((record) => record.task.title === "ORDER: Fresh Market - Richmond VIC 3121"));
 }
 
 {
@@ -86,7 +88,8 @@ function runExport({
   });
 
   assert.equal(records.length, 1);
-  assert.equal(records[0].task.type, "pickup");
+  assert.equal(records[0].task.type, "order");
+  assert.equal(records[0].task.eventType, "order");
   assert.equal(records[0].task.title, "PICKUP: Northside Suppliers - Richmond VIC 3121");
 }
 
@@ -122,9 +125,12 @@ function runExport({
     ],
   });
 
-  assert.equal(records.length, 2);
-  assert.ok(records.some((record) => record.task.type === "delivery"));
-  assert.ok(records.some((record) => record.task.type === "pickup"));
+  assert.equal(records.length, 3);
+  assert.ok(records.some((record) => record.task.eventType === "delivery"));
+  assert.equal(
+    records.filter((record) => record.task.eventType === "order").length,
+    2
+  );
 }
 
 {
@@ -152,8 +158,9 @@ function runExport({
     ],
   });
 
-  assert.equal(records.length, 1);
-  assert.equal(records[0].task.type, "delivery");
+  assert.equal(records.length, 2);
+  assert.ok(records.some((record) => record.task.eventType === "delivery"));
+  assert.ok(records.some((record) => record.task.eventType === "order"));
 }
 
 console.log("Spokenit export tests passed.");

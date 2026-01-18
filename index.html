@@ -346,7 +346,7 @@
 
           <section id="export" class="tab-panel" aria-labelledby="Export">
             <div class="panel-header">
-              <h2 class="page-title">Export deliveries</h2>
+              <h2 class="page-title">Export orders & deliveries</h2>
             </div>
             <div class="export-grid">
               <div class="card">
@@ -360,8 +360,8 @@
                 <label>Rep
                   <select id="exportRep"></select>
                 </label>
-                <label><input type="checkbox" id="exportIncludeCompleted" checked /> Include completed deliveries</label>
-                <label><input type="checkbox" id="exportIncludeTomorrow" /> Include tomorrow's deliveries</label>
+                <label><input type="checkbox" id="exportIncludeCompleted" checked /> Include completed orders and deliveries</label>
+                <label><input type="checkbox" id="exportIncludeTomorrow" /> Include tomorrow's orders and deliveries</label>
                 <button id="exportCsvBtn" class="btn btn-primary">Download CSV</button>
                 <div id="exportSummary" class="muted"></div>
               </div>
@@ -452,7 +452,7 @@
                 <button class="btn btn-secondary tab" data-tab="reps">Reps</button>
                 <button class="btn btn-secondary tab" data-tab="expected">Expected Orders</button>
                 <button class="btn btn-secondary tab" data-tab="import">Import Customers</button>
-                <button class="btn btn-secondary tab" data-tab="export">Export Deliveries</button>
+                <button class="btn btn-secondary tab" data-tab="export">Export Orders & Deliveries</button>
                 <button class="btn btn-secondary tab" data-tab="backup">Backup & Restore</button>
               </div>
             </div>
