@@ -31,7 +31,7 @@ Presets are saved in your browser and can be edited anytime.
 ## Customer CSV import
 Use **Customers → Upload CSV** to import `ov_customers.csv`-style files. The importer:
 - Previews the first 20 rows with validation errors.
-- Upserts by email (preferred) or store name + address + postcode.
+- Inserts rows with email (duplicates allowed) and upserts by store name + address + postcode when email is missing.
 - Normalizes day arrays to weekdays only (Mon–Fri).
 
 **Accepted header aliases (case/spacing/underscore-insensitive)**

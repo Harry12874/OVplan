@@ -4141,6 +4141,23 @@ async function upsertCustomerCsvBatch(records, onConflict, resultsEl) {
   }
 }
 
+async function insertCustomerCsvBatch(records, resultsEl) {
+  const chunkSize = 100;
+  const totalChunks = Math.ceil(records.length / chunkSize);
+  for (let start = 0; start < records.length; start += chunkSize) {
+    const chunk = records.slice(start, start + chunkSize);
+    if (!chunk.length) continue;
+    const chunkIndex = Math.floor(start / chunkSize) + 1;
+    setCustomerCsvImportStage(`Uploading chunk ${chunkIndex}/${totalChunks}…`, resultsEl);
+    const { error } = await withTimeout(
+      supabase.from("customers").insert(chunk),
+      SUPABASE_TIMEOUT_MS,
+      "Supabase insert timed out."
+    );
+    if (error) throw error;
+  }
+}
+
 async function handleCustomerCsvImport() {
   if (!canWrite()) {
     showOfflineAlert();
@@ -4200,7 +4217,7 @@ async function handleCustomerCsvImport() {
     }
     setCloudStatus("syncing");
     if (withEmail.length) {
-      await upsertCustomerCsvBatch(withEmail, "email", resultsEl);
+      await insertCustomerCsvBatch(withEmail, resultsEl);
       successCount += withEmail.length;
     }
     if (noEmail.length) {
