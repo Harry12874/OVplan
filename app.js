@@ -1276,10 +1276,14 @@ function syncScheduleViewControls() {
   const view = state.settings.app.scheduleView;
   if (elements.scheduleToggleExpected) {
     elements.scheduleToggleExpected.checked = view.toggles.expectedOrders;
+  }
+  if (elements.scheduleToggleDeliveries) {
     elements.scheduleToggleDeliveries.checked = view.toggles.deliveries;
   }
   if (elements.todayToggleExpected) {
     elements.todayToggleExpected.checked = view.toggles.expectedOrders;
+  }
+  if (elements.todayToggleDeliveries) {
     elements.todayToggleDeliveries.checked = view.toggles.deliveries;
   }
   setStatusChipSelection(elements.scheduleStatusFilters, view.statusFilter);
