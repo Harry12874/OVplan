@@ -1273,19 +1273,20 @@ function setStatusChipSelection(container, value) {
 }
 
 function syncScheduleViewControls() {
-  const view = state.settings.app.scheduleView;
-  if (elements.scheduleToggleExpected) {
-    elements.scheduleToggleExpected.checked = view.toggles.expectedOrders;
-  }
-  if (elements.scheduleToggleDeliveries) {
-    elements.scheduleToggleDeliveries.checked = view.toggles.deliveries;
-  }
-  if (elements.todayToggleExpected) {
-    elements.todayToggleExpected.checked = view.toggles.expectedOrders;
-  }
-  if (elements.todayToggleDeliveries) {
-    elements.todayToggleDeliveries.checked = view.toggles.deliveries;
-  }
+  const view = state.settings?.app?.scheduleView ?? defaultSettings.scheduleView;
+  const toggles = {
+    ...defaultSettings.scheduleView.toggles,
+    ...(view?.toggles || {}),
+  };
+  const syncCheckbox = (element, elementId, value) => {
+    const checkbox = element || document.getElementById(elementId);
+    if (!checkbox) return;
+    checkbox.checked = value;
+  };
+  syncCheckbox(elements.scheduleToggleExpected, "scheduleToggleExpected", toggles.expectedOrders);
+  syncCheckbox(elements.scheduleToggleDeliveries, "scheduleToggleDeliveries", toggles.deliveries);
+  syncCheckbox(elements.todayToggleExpected, "todayToggleExpected", toggles.expectedOrders);
+  syncCheckbox(elements.todayToggleDeliveries, "todayToggleDeliveries", toggles.deliveries);
   setStatusChipSelection(elements.scheduleStatusFilters, view.statusFilter);
   setStatusChipSelection(elements.todayStatusFilters, view.statusFilter);
   if (elements.scheduleSearch) {
