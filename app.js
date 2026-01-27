@@ -1946,6 +1946,28 @@ function mapCustomerFromSupabase(row) {
   };
 }
 
+function mapRepToSupabase(rep) {
+  const userId = getCurrentUserId();
+  return {
+    id: rep.id,
+    name: rep.name || "",
+    phone: rep.phone || "",
+    vehicle: rep.vehicle || "",
+    active: rep.active !== false,
+    user_id: userId,
+  };
+}
+
+function mapRepFromSupabase(row) {
+  return {
+    id: row?.id || uuid(),
+    name: row?.name || "",
+    phone: row?.phone || "",
+    vehicle: row?.vehicle || "",
+    active: row?.active !== false,
+  };
+}
+
 function mapScheduleEventToSupabase(event) {
   const userId = getCurrentUserId();
   return {
@@ -2009,6 +2031,12 @@ async function loadFromSupabase() {
   if (!state.session) return;
   setCloudStatus("syncing");
   try {
+    const { data: repsData, error: repsError } = await withTimeout(
+      supabase.from("reps").select("*"),
+      SUPABASE_TIMEOUT_MS,
+      "Supabase reps fetch timed out."
+    );
+    if (repsError) throw repsError;
     const { data: customersData, error: customersError } = await withTimeout(
       supabase.from("customers").select("*"),
       SUPABASE_TIMEOUT_MS,
@@ -2027,6 +2055,7 @@ async function loadFromSupabase() {
       "Supabase sticky notes fetch timed out."
     );
     if (notesError) throw notesError;
+    const reps = (repsData || []).map(mapRepFromSupabase);
     const customers = (customersData || []).map((row) => {
       const customer = mapCustomerFromSupabase(row);
       return customer.id ? customer : { ...customer, id: createCustomerId() };
@@ -2040,9 +2069,11 @@ async function loadFromSupabase() {
       text: note.text || "",
       customer_name: note.customer_name || "",
     }));
+    await clearStore("reps");
     await clearStore("customers");
     await clearStore("schedule_events");
     await clearStore("sticky_notes");
+    await bulkPut("reps", reps);
     await bulkPut("customers", customers);
     await bulkPut("schedule_events", events);
     await bulkPut("sticky_notes", stickyNotes);
@@ -2104,6 +2135,31 @@ async function syncUpsertCustomer(customer, { mode } = {}) {
   }
   console.log("Customer row saved", data);
   return mapCustomerFromSupabase(data);
+}
+
+async function syncUpsertRep(rep) {
+  const userId = getCurrentUserId();
+  if (!userId) {
+    showSnackbar("Sign in to save reps.");
+    throw new Error("Missing session");
+  }
+  setCloudStatus("syncing");
+  const payload = mapRepToSupabase(rep);
+  const { data, error } = await supabase.from("reps").upsert(payload).select().single();
+  if (error) {
+    const isRlsError =
+      error?.code === "42501" ||
+      (typeof error?.message === "string" && error.message.toLowerCase().includes("permission denied"));
+    if (isRlsError) {
+      error.isRls = true;
+    }
+    throw error;
+  }
+  if (!data) {
+    throw new Error("Rep update failed. Record not found.");
+  }
+  setCloudStatus("synced", toISO());
+  return mapRepFromSupabase(data);
 }
 
 async function runCustomerDbHealthCheck() {
@@ -2181,6 +2237,7 @@ async function syncDeleteCustomer(customerId) {
 
 async function syncPushAll() {
   if (!state.session) return;
+  await syncUpsertBatch("reps", state.reps, mapRepToSupabase);
   await syncUpsertBatch("customers", state.customers, mapCustomerToSupabase);
   await syncUpsertBatch("schedule_events", state.scheduleEvents, mapScheduleEventToSupabase);
   await syncUpsertBatch("sticky_notes", state.stickyNotes, mapStickyNoteToSupabase);
@@ -4356,15 +4413,31 @@ function openRepModal(rep = {}) {
       return;
     }
 
-    await put("reps", updated);
-    const exists = state.reps.find((item) => item.id === updated.id);
-    if (exists) {
-      state.reps = state.reps.map((item) => (item.id === updated.id ? updated : item));
-    } else {
-      state.reps.push(updated);
+    try {
+      const savedRep = await syncUpsertRep(updated);
+      await put("reps", savedRep);
+      const exists = state.reps.find((item) => item.id === savedRep.id);
+      if (exists) {
+        state.reps = state.reps.map((item) => (item.id === savedRep.id ? savedRep : item));
+      } else {
+        state.reps.push(savedRep);
+      }
+      closeModal();
+      renderAll();
+    } catch (error) {
+      console.error("Supabase rep upsert failed", {
+        message: error?.message,
+        details: error?.details,
+        hint: error?.hint,
+        code: error?.code,
+      });
+      handleSupabaseError(error, { context: "Supabase rep upsert failed", alertOnOffline: true });
+      const isRlsError =
+        error?.isRls ||
+        error?.code === "42501" ||
+        (typeof error?.message === "string" && error.message.toLowerCase().includes("permission denied"));
+      showSnackbar(isRlsError ? "Save failed due to permissions (RLS)." : error?.message || "Unable to save rep.");
     }
-    closeModal();
-    renderAll();
   });
 }
 
@@ -6010,11 +6083,17 @@ async function handleRestore() {
     await put("settings", data.settings.app);
   }
   await loadState();
+  const reps = data.reps || [];
   const customers = importedCustomers;
   const events = data.scheduleEvents || [];
   const stickyNotes = data.stickyNotes || [];
   elements.backupStatus.textContent = `Restoring ${customers.length} customers…`;
   try {
+    await syncUpsertBatch("reps", reps, mapRepToSupabase, {
+      onProgress: (done, total) => {
+        elements.backupStatus.textContent = `Syncing reps ${done}/${total}…`;
+      },
+    });
     await syncUpsertBatch("customers", customers, mapCustomerToSupabase, {
       onProgress: (done, total) => {
         elements.backupStatus.textContent = `Syncing customers ${done}/${total}…`;
@@ -6190,6 +6269,7 @@ async function loadSampleData() {
   await bulkPut("reps", [repA, repB]);
   await bulkPut("customers", customers);
   try {
+    await syncUpsertBatch("reps", [repA, repB], mapRepToSupabase);
     for (const customer of customers) {
       await syncUpsertCustomer(customer, { mode: "insert" });
     }
