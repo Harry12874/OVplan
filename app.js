@@ -109,15 +109,12 @@ function loadElements() {
     dashboardSearch: document.getElementById("dashboardSearch"),
     todayOrdersPutList: document.getElementById("todayOrdersPutList"),
     todayOrdersGetList: document.getElementById("todayOrdersGetList"),
-    todayPacksList: document.getElementById("todayPacksList"),
     todayDeliveriesList: document.getElementById("todayDeliveriesList"),
     todayOrdersPutCount: document.getElementById("todayOrdersPutCount"),
     todayOrdersGetCount: document.getElementById("todayOrdersGetCount"),
-    todayPacksCount: document.getElementById("todayPacksCount"),
     todayDeliveriesCount: document.getElementById("todayDeliveriesCount"),
     addOneOffTodayBtn: document.getElementById("addOneOffTodayBtn"),
     todayToggleExpected: document.getElementById("todayToggleExpected"),
-    todayTogglePacks: document.getElementById("todayTogglePacks"),
     todayToggleDeliveries: document.getElementById("todayToggleDeliveries"),
     todayStatusFilters: document.getElementById("todayStatusFilters"),
     ordersList: document.getElementById("ordersList"),
@@ -132,7 +129,6 @@ function loadElements() {
     customersScheduleFilter: document.getElementById("customersScheduleFilter"),
     scheduleRepFilter: document.getElementById("scheduleRepFilter"),
     scheduleToggleExpected: document.getElementById("scheduleToggleExpected"),
-    scheduleTogglePacks: document.getElementById("scheduleTogglePacks"),
     scheduleToggleDeliveries: document.getElementById("scheduleToggleDeliveries"),
     scheduleStatusFilters: document.getElementById("scheduleStatusFilters"),
     scheduleList: document.getElementById("scheduleList"),
@@ -205,7 +201,6 @@ function loadElements() {
     debugTodayIndex: document.getElementById("debugTodayIndex"),
     debugTodayLabel: document.getElementById("debugTodayLabel"),
     debugOrdersCount: document.getElementById("debugOrdersCount"),
-    debugPacksCount: document.getElementById("debugPacksCount"),
     debugDeliveriesCount: document.getElementById("debugDeliveriesCount"),
     debugSampleCustomers: document.getElementById("debugSampleCustomers"),
     debugDayCounts: document.getElementById("debugDayCounts"),
@@ -520,7 +515,7 @@ function debugTodayCounts() {
   const items = buildAgendaItems({
     dateStart: today,
     dateEnd: today,
-    toggles: { expectedOrders: true, packs: true, deliveries: true },
+    toggles: { expectedOrders: true, deliveries: true },
     statusFilter: "all",
     repFilter: "all",
     searchTerm: "",
@@ -529,11 +524,10 @@ function debugTodayCounts() {
     (summary, item) => {
       const baseKind = item.kind === "custom_oneoff" ? item.oneOffKind : item.kind;
       if (baseKind === "expected_order") summary.orders += 1;
-      if (baseKind === "pack") summary.packs += 1;
       if (baseKind === "delivery") summary.deliveries += 1;
       return summary;
     },
-    { orders: 0, packs: 0, deliveries: 0 }
+    { orders: 0, deliveries: 0 }
   );
 }
 
@@ -554,9 +548,6 @@ function updateDebugPanel() {
   const counts = debugTodayCounts();
   if (elements.debugOrdersCount) {
     elements.debugOrdersCount.textContent = String(counts.orders);
-  }
-  if (elements.debugPacksCount) {
-    elements.debugPacksCount.textContent = String(counts.packs);
   }
   if (elements.debugDeliveriesCount) {
     elements.debugDeliveriesCount.textContent = String(counts.deliveries);
@@ -723,7 +714,6 @@ const defaultSettings = {
   scheduleView: {
     toggles: {
       expectedOrders: true,
-      packs: true,
       deliveries: true,
     },
     statusFilter: "all",
@@ -736,6 +726,7 @@ const defaultSettings = {
 
 function ensureSettingsDefaults(settings = {}) {
   const safe = settings || {};
+  const { packs: _packs, ...safeScheduleToggles } = safe.scheduleView?.toggles || {};
   return {
     ...safe,
     exportPresets: Array.isArray(safe.exportPresets) ? safe.exportPresets : [],
@@ -746,7 +737,7 @@ function ensureSettingsDefaults(settings = {}) {
       ...safe.scheduleView,
       toggles: {
         ...defaultSettings.scheduleView.toggles,
-        ...(safe.scheduleView?.toggles || {}),
+        ...safeScheduleToggles,
       },
     },
   };
@@ -1285,12 +1276,10 @@ function syncScheduleViewControls() {
   const view = state.settings.app.scheduleView;
   if (elements.scheduleToggleExpected) {
     elements.scheduleToggleExpected.checked = view.toggles.expectedOrders;
-    elements.scheduleTogglePacks.checked = view.toggles.packs;
     elements.scheduleToggleDeliveries.checked = view.toggles.deliveries;
   }
   if (elements.todayToggleExpected) {
     elements.todayToggleExpected.checked = view.toggles.expectedOrders;
-    elements.todayTogglePacks.checked = view.toggles.packs;
     elements.todayToggleDeliveries.checked = view.toggles.deliveries;
   }
   setStatusChipSelection(elements.scheduleStatusFilters, view.statusFilter);
@@ -2377,7 +2366,7 @@ function renderDashboard() {
   const today = todayKey();
   const repFilter = elements.dashboardRepFilter.value;
   const searchTerm = elements.dashboardSearch.value || "";
-  const toggles = state.settings.app.scheduleView.toggles;
+  const toggles = { ...state.settings.app.scheduleView.toggles, packs: false };
   const statusFilter = state.settings.app.scheduleView.statusFilter;
 
   const items = buildAgendaItems({
@@ -2430,16 +2419,12 @@ function renderDashboard() {
         item.oneOffKind === "expected_order" &&
         item.orderMode !== "THEY_PUT_ORDER")
   );
-  const packs = items.filter(
-    (item) => item.kind === "pack" || (item.kind === "custom_oneoff" && item.oneOffKind === "pack")
-  );
   const deliveries = items.filter(
     (item) => item.kind === "delivery" || (item.kind === "custom_oneoff" && item.oneOffKind === "delivery")
   );
 
   elements.todayOrdersPutCount.textContent = safeExpectedOrdersCount;
   elements.todayOrdersGetCount.textContent = ordersGet.length;
-  elements.todayPacksCount.textContent = packs.length;
   elements.todayDeliveriesCount.textContent = deliveries.length;
 
   if (typeof process !== "undefined" && process.env?.NODE_ENV !== "production") {
@@ -2454,14 +2439,11 @@ function renderDashboard() {
     ordersPut.map(agendaItemCard).join("") || "<p class=\"muted\">No customers placing orders today.</p>";
   elements.todayOrdersGetList.innerHTML =
     ordersGet.map(agendaItemCard).join("") || "<p class=\"muted\">No orders to take today.</p>";
-  elements.todayPacksList.innerHTML =
-    packs.map(agendaItemCard).join("") || "<p class=\"muted\">No packing today.</p>";
   elements.todayDeliveriesList.innerHTML =
     deliveries.map(agendaItemCard).join("") || "<p class=\"muted\">No deliveries today.</p>";
 
   attachAgendaItemActions(elements.todayOrdersPutList, ordersPut);
   attachAgendaItemActions(elements.todayOrdersGetList, ordersGet);
-  attachAgendaItemActions(elements.todayPacksList, packs);
   attachAgendaItemActions(elements.todayDeliveriesList, deliveries);
 }
 
@@ -2734,7 +2716,7 @@ async function createPlaceholderOrder(customer) {
 function renderSchedule() {
   const view = state.settings.app.scheduleView;
   const repFilter = elements.scheduleRepFilter.value;
-  const toggles = view.toggles;
+  const toggles = { ...view.toggles, packs: false };
   const statusFilter = view.statusFilter;
   const searchTerm = view.searchTerm || "";
   const anchorDate = view.anchorDate || todayKey();
@@ -2779,7 +2761,6 @@ function renderSchedule() {
       searchTerm,
     }).sort(sortByTypeThenTitle);
     const deliveries = items.filter((item) => baseKindForItem(item) === "delivery");
-    const packs = items.filter((item) => baseKindForItem(item) === "pack");
     const orders = items.filter((item) => baseKindForItem(item) === "expected_order");
     elements.scheduleList.innerHTML = `
       <div class="schedule-day-view">
@@ -2790,15 +2771,6 @@ function renderSchedule() {
           </div>
           <div class="lane-items">
             ${deliveries.map((item) => scheduleItemDetailCard(item)).join("") || "<p class=\"muted\">No deliveries.</p>"}
-          </div>
-        </div>
-        <div class="schedule-lane">
-          <div class="lane-header">
-            <span class="type-label pack">Packing</span>
-            <span class="pill">${packs.length}</span>
-          </div>
-          <div class="lane-items">
-            ${packs.map((item) => scheduleItemDetailCard(item)).join("") || "<p class=\"muted\">No packing.</p>"}
           </div>
         </div>
         <div class="schedule-lane">
@@ -6562,7 +6534,6 @@ function setupEvents() {
   const updateToggleSettings = async () => {
     state.settings.app.scheduleView.toggles = {
       expectedOrders: elements.todayToggleExpected.checked,
-      packs: elements.todayTogglePacks.checked,
       deliveries: elements.todayToggleDeliveries.checked,
     };
     await saveSettings();
@@ -6570,22 +6541,10 @@ function setupEvents() {
     renderAll();
   };
   on(elements.todayToggleExpected, "change", updateToggleSettings);
-  on(elements.todayTogglePacks, "change", updateToggleSettings);
   on(elements.todayToggleDeliveries, "change", updateToggleSettings);
   on(elements.scheduleToggleExpected, "change", async () => {
     state.settings.app.scheduleView.toggles = {
       expectedOrders: elements.scheduleToggleExpected.checked,
-      packs: elements.scheduleTogglePacks.checked,
-      deliveries: elements.scheduleToggleDeliveries.checked,
-    };
-    await saveSettings();
-    syncScheduleViewControls();
-    renderAll();
-  });
-  on(elements.scheduleTogglePacks, "change", async () => {
-    state.settings.app.scheduleView.toggles = {
-      expectedOrders: elements.scheduleToggleExpected.checked,
-      packs: elements.scheduleTogglePacks.checked,
       deliveries: elements.scheduleToggleDeliveries.checked,
     };
     await saveSettings();
@@ -6595,7 +6554,6 @@ function setupEvents() {
   on(elements.scheduleToggleDeliveries, "change", async () => {
     state.settings.app.scheduleView.toggles = {
       expectedOrders: elements.scheduleToggleExpected.checked,
-      packs: elements.scheduleTogglePacks.checked,
       deliveries: elements.scheduleToggleDeliveries.checked,
     };
     await saveSettings();
