@@ -112,10 +112,6 @@
                 <div class="summary-label">Expected Orders</div>
                 <span id="todayOrdersGetCount" class="sr-only"></span>
               </div>
-              <div class="summary-tile tile-packs">
-                <div class="summary-number" id="todayPacksCount"></div>
-                <div class="summary-label">Packing Today</div>
-              </div>
             </div>
 
             <div class="dashboard-grid">
@@ -126,7 +122,6 @@
                 </div>
                 <div id="todayOrdersPutList" class="list"></div>
                 <div id="todayOrdersGetList" class="list"></div>
-                <div id="todayPacksList" class="list"></div>
                 <div id="todayDeliveriesList" class="list"></div>
               </div>
               <div class="card">
@@ -137,7 +132,6 @@
                   <input id="dashboardSearch" type="search" placeholder="Search store or address" class="search" />
                   <div class="toggle-group">
                     <label><input id="todayToggleExpected" type="checkbox" checked /> Expected orders</label>
-                    <label><input id="todayTogglePacks" type="checkbox" checked /> Packs</label>
                     <label><input id="todayToggleDeliveries" type="checkbox" checked /> Deliveries</label>
                   </div>
                   <div id="todayStatusFilters" class="filter-chips">
@@ -155,7 +149,7 @@
             <div class="panel-header">
               <div>
                 <h2 class="page-title">Schedule</h2>
-                <p class="muted">Plan deliveries, orders, and packing.</p>
+                <p class="muted">Plan orders and deliveries.</p>
               </div>
               <div class="actions">
                 <button id="addOneOffScheduleBtn" class="btn btn-primary" data-requires-online="true">+ One-off item</button>
@@ -202,7 +196,6 @@
                         </div>
                         <div class="toggle-group">
                           <label><input id="scheduleToggleExpected" type="checkbox" checked /> Orders</label>
-                          <label><input id="scheduleTogglePacks" type="checkbox" checked /> Packing</label>
                           <label><input id="scheduleToggleDeliveries" type="checkbox" checked /> Deliveries</label>
                         </div>
                         <select id="scheduleRepFilter" title="Filter schedule by rep."></select>
@@ -475,10 +468,6 @@
                 <div>
                   <div class="muted">Orders today</div>
                   <strong id="debugOrdersCount">—</strong>
-                </div>
-                <div>
-                  <div class="muted">Packs today</div>
-                  <strong id="debugPacksCount">—</strong>
                 </div>
                 <div>
                   <div class="muted">Deliveries today</div>
